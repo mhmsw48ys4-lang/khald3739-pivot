@@ -287,12 +287,18 @@ async function scanWithFiling(found,sub,filing,facts){
   const interestCombined=rowNumber(rows,[/^interest income and unrealized gains from marketable securities$/i]);
   let debt=debtFromFacts(facts,filing.accn,end);
   if(debt==null) debt=rowNumber(rows,[/interest[- ]bearing debt/i,/short[- ]term debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/convertible debt/i,/notes? payable/i,/borrowings?/i]);
+  if(debt==null){
+    const debtCurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*current$/i]);
+    const debtNoncurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*non-current$/i]);
+    debt=sumUnique([debtCurrent,debtNoncurrent]);
+  }
   if(debt==null) debt=0;
   const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
   const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i,/^marketable securities$/i]);
+  const shortTermInvestments=rowNumber(rows,[/^short[- ]term investments$/i]);
   const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
   const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
-  const liquidityInvestments=liquidityFact ?? moneyMarket ?? interestBearingInvestments;
+  const liquidityInvestments=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
   const liquidityAssets=liquidityInvestments;
   const liquidityKnown=liquidityInvestments!=null;
   const price=await marketPrice(found.ticker);
@@ -405,6 +411,11 @@ async function scan(input){
       /borrowings?/i
     ]);
   }
+  if(debt==null){
+    const debtCurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*current$/i]);
+    const debtNoncurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*non-current$/i]);
+    debt=sumUnique([debtCurrent,debtNoncurrent]);
+  }
   // Lease liabilities are operating-lease obligations and are not used as the
   // interest-bearing debt numerator by this screen.
   if(debt==null) debt=0;
@@ -438,8 +449,9 @@ async function scan(input){
     /corporate bonds?/i
   ]);
 
+  const shortTermInvestments=rowNumber(rows,[/^short[- ]term investments$/i]);
   const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
-  const liquidityInvestments=liquidityFact ?? moneyMarket ?? interestBearingInvestments;
+  const liquidityInvestments=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
   // Cash itself is not an interest-taking deposit. Keep it separate.
   // The AAOIFI 30% test is specifically for interest-taking deposits;
   // marketable money-market funds are shown separately as an interest-linked investment asset.
