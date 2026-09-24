@@ -22,16 +22,27 @@ function pickFact(facts,tags,accn,end,form){
 function instantFact(facts,tags,accn,end,form){
   const f=pickFact(facts,tags,accn,end,form); return f?.val!=null?money(f.val):null;
 }
-function durationFact(facts,tags,accn,start,end,form){
+function durationFact(facts,tags,accn,end,form,targetDays){
+  const candidates=[];
   for(const tag of tags){
     const f=facts?.["us-gaap"]?.[tag]; if(!f)continue;
     const units=Object.values(f.units||{}).flat();
-    let hits=units.filter(x=>x.accn===accn&&x.end===end&&(!start||x.start===start));
-    if(form){const same=hits.filter(x=>x.form===form);if(same.length)hits=same;}
-    if(!hits.length) hits=units.filter(x=>x.accn===accn&&x.end===end&&(!form||x.form===form));
-    if(hits.length)return hits.sort((a,b)=>String(b.filed).localeCompare(String(a.filed)))[0];
+    for(const x of units){
+      if(x.accn!==accn || x.end!==end || !x.start) continue;
+      if(form && x.form!==form) continue;
+      const days=Math.round((new Date(x.end+"T00:00:00Z")-new Date(x.start+"T00:00:00Z"))/86400000);
+      if(days>0) candidates.push({...x,days});
+    }
   }
-  return null;
+  if(!candidates.length && form){
+    return durationFact(facts,tags,accn,end,null,targetDays);
+  }
+  if(!candidates.length)return null;
+  candidates.sort((a,b)=>{
+    const ad=Math.abs(a.days-(targetDays||90)), bd=Math.abs(b.days-(targetDays||90));
+    return ad-bd || String(b.filed||"").localeCompare(String(a.filed||""));
+  });
+  return candidates[0];
 }
 function stripTable(html){
   const rows=[]; const re=/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi; let m;
@@ -73,9 +84,10 @@ async function scan(symbol){
   let rows=[]; try{const fr=await sec(filingUrl);if(fr.ok)rows=stripTable(await fr.text());}catch{}
   const end=reportDate;
   const shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],accn,null,form)??instantFact(facts,["EntityCommonStockSharesOutstanding"],accn,end,form);
-  const revenueFact=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],accn,null,end,form);
+  const targetDays=form==="10-K"?365:90;
+  const revenueFact=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],accn,end,form,targetDays);
   const revenue=rowValue(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i])??(revenueFact?.val!=null?money(revenueFact.val):null);
-  const interestFact=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],accn,null,end,form);
+  const interestFact=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],accn,end,form,targetDays);
   const interest=rowValue(rows,[/^interest income(?:, net)?$/i])??(interestFact?.val!=null?money(interestFact.val):null);
   const debtFact=instantFact(facts,["LongTermDebtCurrent","LongTermDebtNoncurrent","LongTermDebt","LongTermDebtAndFinanceLeaseObligationsCurrent","LongTermDebtAndFinanceLeaseObligationsNoncurrent","ConvertibleNotesPayableCurrent","ConvertibleNotesPayableNoncurrent","ConvertibleNotesPayable"],accn,end,form);
   const debt=rowValue(rows,[/interest[- ]bearing debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/notes? payable/i])??debtFact;
@@ -94,6 +106,7 @@ async function scan(symbol){
       deposits:deposits==null?null:pct(deposits,marketCap)<=30,
       prohibited:interest==null||revenue==null?null:interestPct(interest,revenue)<=5
     },
+    periodDays: revenueFact?.days ?? interestFact?.days ?? null,
     note: interest==null ? "لم يظهر إفصاح مستقل واضح عن دخل الفوائد في هذا التقرير؛ لذلك لا نحكم على بند الدخل المحرم." : null
   };
 }
