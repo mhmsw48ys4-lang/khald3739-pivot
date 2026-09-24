@@ -54,24 +54,39 @@ async function sec(url){
 
 function filingFromFacts(facts){
   const seen=new Map();
-  for(const taxonomy of Object.values(facts||{})){
-    for(const fact of Object.values(taxonomy||{})){
+  const financialNeedles=[
+    "Revenue","SalesRevenue","CashAndCashEquivalents","Assets","Liabilities",
+    "LongTermDebt","Debt","InterestIncome","IncomeLoss","StockholdersEquity",
+    "AccountsReceivable","Inventory","MarketableSecurities","Investments"
+  ];
+  for(const [taxonomy,taxonomyFacts] of Object.entries(facts||{})){
+    for(const [tag,fact] of Object.entries(taxonomyFacts||{})){
       for(const units of Object.values(fact?.units||{})){
         for(const x of units||[]){
-          if(["10-Q","10-Q/A","10-K","10-K/A","20-F","20-F/A","40-F","40-F/A","6-K"].includes(x.form) && x.accn && x.filed && x.end){
-            const key=x.accn;
-            if(!seen.has(key)){
-              seen.set(key,{form:x.form,accn:x.accn,filingDate:x.filed,reportDate:x.end,doc:null});
-            }else{
-              const old=seen.get(key);
-              if(x.filed>old.filingDate) old.filingDate=x.filed;
-            }
+          const form=x.form;
+          if(!["10-Q","10-Q/A","10-K","10-K/A","20-F","20-F/A","40-F","40-F/A","6-K"].includes(form)) continue;
+          if(!x.accn || !x.filed || !x.end) continue;
+          // A 6-K is useful here only when its XBRL actually contains
+          // financial-statement facts; this avoids selecting a later 6-K
+          // that only reports a financing or corporate event.
+          if(form==="6-K" && !financialNeedles.some(n=>String(tag).includes(n))) continue;
+          const key=x.accn;
+          if(!seen.has(key)){
+            seen.set(key,{form,accn:x.accn,filingDate:x.filed,reportDate:x.end,doc:null});
+          }else{
+            const old=seen.get(key);
+            if(x.filed>old.filingDate) old.filingDate=x.filed;
+            if(x.end>old.reportDate) old.reportDate=x.end;
           }
         }
       }
     }
   }
-  const arr=[...seen.values()].sort((a,b)=>String(b.filingDate).localeCompare(String(a.filingDate)));
+  const arr=[...seen.values()].sort((a,b)=>{
+    const fd=String(b.filingDate).localeCompare(String(a.filingDate));
+    if(fd!==0) return fd;
+    return String(b.reportDate).localeCompare(String(a.reportDate));
+  });
   return arr[0]||null;
 }
 
