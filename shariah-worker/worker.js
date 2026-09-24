@@ -135,7 +135,7 @@ function chooseFiling(recent){
   let best=null;
   for(let i=0;i<(recent.form||[]).length;i++){
     const form=recent.form[i];
-    if(form!=="10-Q" && form!=="10-K") continue;
+    if(form!=="10-Q" && form!=="10-Q/A" && form!=="10-K" && form!=="10-K/A") continue;
     const candidate={
       form,
       accn:recent.accessionNumber[i],
@@ -229,12 +229,6 @@ function sumUnique(values){
 }
 
 function debtFromFacts(facts,accn,end){
-  const totalTags=[
-    "LongTermDebtAndFinanceLeaseObligations",
-    "LongTermDebt",
-    "ConvertibleNotesPayable",
-    "NotesPayable"
-  ];
   const currentTags=[
     "LongTermDebtCurrent",
     "LongTermDebtAndFinanceLeaseObligationsCurrent",
@@ -247,14 +241,22 @@ function debtFromFacts(facts,accn,end){
     "ConvertibleNotesPayableNoncurrent",
     "NotesPayableNoncurrent"
   ];
+  const current=instantFact(facts,currentTags,accn,end)?.value;
+  const noncurrent=instantFact(facts,noncurrentTags,accn,end)?.value;
+  const split=sumUnique([current,noncurrent]);
+  if(split!=null) return split;
+
+  const totalTags=[
+    "LongTermDebtAndFinanceLeaseObligations",
+    "LongTermDebt",
+    "ConvertibleNotesPayable",
+    "NotesPayable"
+  ];
   for(const tag of totalTags){
     const x=instantFact(facts,[tag],accn,end);
     if(x?.value!=null) return x.value;
   }
-  return sumUnique([
-    instantFact(facts,currentTags,accn,end)?.value,
-    instantFact(facts,noncurrentTags,accn,end)?.value
-  ]);
+  return null;
 }
 
 async function marketPrice(symbol){
@@ -284,7 +286,7 @@ async function scanWithFiling(found,sub,filing,facts){
   const rows=tableRows(html);
   const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
   tableScale = localTableScale;
-  const targetDays=filing.form==="10-K"?365:91;
+  const targetDays=filing.form.startsWith("10-K")?365:91;
   const end=filing.reportDate;
   let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
   if(shares==null){
@@ -294,27 +296,28 @@ async function scanWithFiling(found,sub,filing,facts){
     if(m) shares=num(m[1]);
   }
   const rev=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],filing.accn,end,filing.form,targetDays);
-  const revenue=rowNumber(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i]) ?? rev?.value ?? null;
+  const revenue=rev?.value ?? rowNumber(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i]) ?? null;
   const interest=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],filing.accn,end,filing.form,targetDays);
-  const interestIncome=rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? interest?.value ?? null;
+  const interestIncome=interest?.value ?? rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? null;
   const financingIncome=rowNumber(rows,[/^financing income(?:, net)?$/i,/^financing income$/i]);
   const interestCombined=rowNumber(rows,[/^interest income and unrealized gains from marketable securities$/i]);
   let debt=debtFromFacts(facts,filing.accn,end);
   if(debt==null) debt=rowNumber(rows,[/interest[- ]bearing debt/i,/short[- ]term debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/convertible debt/i,/notes? payable/i,/borrowings?/i]);
   if(debt==null){
-    const debtCurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*current$/i]);
-    const debtNoncurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*non-current$/i]);
+    const debtCurrent=rowNumber(rows,[/^debt\s*[–—-]\s*current$/i]);
+    const debtNoncurrent=rowNumber(rows,[/^debt\s*[–—-]\s*non-current$/i]);
     debt=sumUnique([debtCurrent,debtNoncurrent]);
   }
   if(debt==null) debt=0;
   const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
-  const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i,/^marketable securities$/i]);
+  const deposits=rowNumber(rows,[/interest[- ]bearing deposits?/i,/interest[- ]bearing deposit accounts?/i]);
+  const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i]);
   const shortTermInvestments=rowNumber(rows,[/^short[- ]term investments$/i]);
   const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
   const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
-  const liquidityInvestments=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
-  const liquidityAssets=liquidityInvestments;
-  const liquidityKnown=liquidityInvestments!=null;
+  const marketableSecurities=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
+  const liquidityAssets=deposits;
+  const liquidityKnown=deposits!=null;
   const price=await marketPrice(found.ticker);
   const marketCap=price!=null && shares!=null ? price*shares : null;
   const debtPct=pct(debt,marketCap);
@@ -326,7 +329,7 @@ async function scanWithFiling(found,sub,filing,facts){
   return {
     symbol:found.ticker,requestedSymbol:upper(filing.requestedSymbol||found.ticker),company:sub?.name||found.name,
     form:filing.form,filingDate:filing.filingDate,reportDate:filing.reportDate,accession:filing.accn,filingUrl,
-    price,shares,marketCap,revenue,debt,debtPct,deposits:liquidityAssets,depositsPct,cash,marketableSecurities:moneyMarket,
+    price,shares,marketCap,revenue,debt,debtPct,deposits:liquidityAssets,depositsPct,cash,marketableSecurities:marketableSecurities ?? moneyMarket,
     liquidityAssets,liquidityAssetsPct:depositsPct,interestIncome,prohibitedPct,financingIncome,financingPct,checks,
     overall:known.length===3?known.every(Boolean):null,limits:LIMITS,interestCombined,periodDays:rev?.days ?? interest?.days ?? null,
     source:"SEC EDGAR + Yahoo Finance",
@@ -383,7 +386,7 @@ async function scan(input){
   const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
   tableScale = localTableScale;
 
-  const targetDays=filing.form==="10-K"?365:91;
+  const targetDays=filing.form.startsWith("10-K")?365:91;
   const end=filing.reportDate;
 
   let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
@@ -426,22 +429,21 @@ async function scan(input){
     ]);
   }
   if(debt==null){
-    const debtCurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*current$/i]);
-    const debtNoncurrent=rowNumber(rows,[/^debt\\s*[–—-]\\s*non-current$/i]);
+    const debtCurrent=rowNumber(rows,[/^debt\s*[–—-]\s*current$/i]);
+    const debtNoncurrent=rowNumber(rows,[/^debt\s*[–—-]\s*non-current$/i]);
     debt=sumUnique([debtCurrent,debtNoncurrent]);
   }
   // Lease liabilities are operating-lease obligations and are not used as the
   // interest-bearing debt numerator by this screen.
   if(debt==null) debt=0;
 
+  // AAOIFI 21: the 30% liquidity condition concerns interest-taking deposits.
+  // Do not substitute marketable securities, money-market funds, or ordinary investments for deposits.
   const deposits=rowNumber(rows,[
     /interest[- ]bearing deposits?/i,
-    /interest[- ]bearing securities/i,
-    /interest[- ]bearing investments?/i
+    /interest[- ]bearing deposit accounts?/i
   ]);
 
-  // AAOIFI liquidity screen: cash + clearly interest-bearing short-term investments.
-  // Do not treat ordinary lease liabilities as interest-bearing debt.
   const cash=instantFact(facts,[
     "CashAndCashEquivalentsAtCarryingValue"
   ],filing.accn,end)?.value
@@ -449,8 +451,7 @@ async function scan(input){
 
   const moneyMarket=rowNumber(rows,[
     /money market mutual funds?/i,
-    /money market funds?/i,
-    /^marketable securities$/i
+    /money market funds?/i
   ]);
 
   const interestBearingInvestments=rowNumber(rows,[
@@ -465,12 +466,9 @@ async function scan(input){
 
   const shortTermInvestments=rowNumber(rows,[/^short[- ]term investments$/i]);
   const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
-  const liquidityInvestments=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
-  // Cash itself is not an interest-taking deposit. Keep it separate.
-  // The AAOIFI 30% test is specifically for interest-taking deposits;
-  // marketable money-market funds are shown separately as an interest-linked investment asset.
-  const liquidityAssets=liquidityInvestments;
-  const liquidityKnown=liquidityInvestments!=null;
+  const marketableSecurities=liquidityFact ?? shortTermInvestments ?? moneyMarket ?? interestBearingInvestments;
+  const liquidityAssets=deposits;
+  const liquidityKnown=deposits!=null;
 
   const price=await marketPrice(found.ticker);
   const marketCap=price!=null && shares!=null ? price*shares : null;
@@ -592,7 +590,7 @@ async function scanStock(){
       '<div class="row"><span class="label">عدد الأسهم</span><span class="value">'+(x.shares==null?"بيانات غير كافية":Number(x.shares).toLocaleString())+'</span></div>'+
       '<div class="row"><span class="label">القيمة السوقية</span><span class="value">'+money(x.marketCap)+'</span></div>'+
       '<div class="row"><span class="label">الدين بفائدة</span><span class="value">'+money(x.debt)+' — '+percent(x.debtPct)+' '+status(x.checks.debt)+'</span></div>'+
-      '<div class="row"><span class="label">استثمارات/ودائع ذات عائد معلنة</span><span class="value">'+money(x.liquidityAssets)+' — '+percent(x.liquidityAssetsPct)+' '+status(x.checks.deposits)+'</span></div>'+
+      '<div class="row"><span class="label">ودائع بفائدة</span><span class="value">'+money(x.liquidityAssets)+' — '+percent(x.liquidityAssetsPct)+' '+status(x.checks.deposits)+'</span></div>'+
       '<div class="row"><span class="label">النقد</span><span class="value">'+money(x.cash)+'</span></div>'+
       '<div class="row"><span class="label">استثمارات سوق نقدية معلنة</span><span class="value">'+money(x.marketableSecurities)+'</span></div>'+
       '<div class="row"><span class="label">الإيرادات</span><span class="value">'+money(x.revenue)+'</span></div>'+
@@ -600,7 +598,7 @@ async function scanStock(){
       '<div class="row"><span class="label">دخل فوائد + مكاسب غير محققة (مجمّع)</span><span class="value">'+money(x.interestCombined)+'</span></div>'+
       '<div class="row"><span class="label">دخل التمويل (مؤشر)</span><span class="value">'+money(x.financingIncome)+' — '+percent(x.financingPct)+'</span></div>'+
       '<p class="note">'+esc(x.note)+'</p>'+
-      '<p class="small">الحدود المستخدمة: الدين '+x.limits.debt+'%، الودائع '+x.limits.deposits+'%، الدخل المحرم '+x.limits.prohibited+'%. النقد لا يدخل في نسبة الودائع؛ والاستثمارات ذات العائد تعرض كبند مستقل للمراجعة. هذه أداة فحص وليست فتوى.</p>'+
+      '<p class="small">الحدود المستخدمة: الدين '+x.limits.debt+'%، الودائع بفائدة '+x.limits.deposits+'%، الدخل المحرم '+x.limits.prohibited+'%. النقد والأوراق/الاستثمارات السوقية لا تُستبدل ببند الودائع في هذه النسبة. هذه أداة فحص وليست فتوى.</p>'+
       '<p class="small"><a href="'+esc(x.filingUrl)+'" target="_blank" rel="noopener">فتح الإفصاح الرسمي في SEC</a></p>'+
       '</div>';
   }catch(e){
