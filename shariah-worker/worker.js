@@ -1,3 +1,4 @@
+/* DEPLOY TRIGGER: Shariah scanner ready - 2026-09-24 */
 const SEC_UA = "khald3739-pivot/1.0 contact@example.com";
 const CORS = {"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET,OPTIONS","Access-Control-Allow-Headers":"Content-Type"};
 
