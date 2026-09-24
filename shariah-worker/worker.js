@@ -102,19 +102,33 @@ async function getCik(symbol){
   const requested = upper(symbol);
   const aliases = {MBTO:"MBOT"};
   const target = aliases[requested] || requested;
-  const r = await sec("https://www.sec.gov/files/company_tickers.json");
-  if(!r.ok) throw Error("تعذر الوصول إلى SEC");
-  const j = await r.json();
-  for(const x of Object.values(j)){
-    if(upper(x.ticker)===target){
-      return {
-        cik:String(x.cik_str).padStart(10,"0"),
-        ticker:target,
-        name:x.title || target
-      };
+  // Use both SEC ticker maps. The exchange file is broader and helps with
+  // symbols that are missing from the basic company_tickers.json map.
+  const urls=[
+    "https://www.sec.gov/files/company_tickers_exchange.json",
+    "https://www.sec.gov/files/company_tickers.json"
+  ];
+  for(const u of urls){
+    const r=await sec(u);
+    if(!r.ok) continue;
+    const j=await r.json();
+    const values=Array.isArray(j?.data)
+      ? j.data
+      : Object.values(j||{});
+    for(const x of values){
+      const ticker=upper(x.ticker);
+      if(ticker===target || ticker.replace(/[-.]/g,"")===target.replace(/[-.]/g,"")){
+        const cik=x.cik_str ?? x.cik;
+        if(cik==null) continue;
+        return {
+          cik:String(cik).padStart(10,"0"),
+          ticker:target,
+          name:x.title || x.name || target
+        };
+      }
     }
   }
-  throw Error("السهم غير موجود في بيانات SEC");
+  throw Error("السهم غير موجود في خرائط SEC الحالية");
 }
 
 function chooseFiling(recent){
@@ -604,7 +618,7 @@ export default {
     if(url.pathname==="/api/scan"){
       try{
         const symbol=(url.searchParams.get("symbol")||"").trim();
-        if(!/^[A-Za-z.]{1,8}$/.test(symbol)) return json({error:"أدخل رمز سهم صحيح"},400);
+        if(!/^[A-Za-z][A-Za-z0-9.-]{0,11}$/.test(symbol)) return json({error:"أدخل رمز سهم صحيح"},400);
         return json(await scan(symbol));
       }catch(e){
         return json({error:e?.message||"فشل الفحص"},500);
