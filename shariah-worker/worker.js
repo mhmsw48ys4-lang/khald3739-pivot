@@ -314,15 +314,17 @@ function instantFact(facts,tags,accn,end=null){
 
 function durationFact(facts,tags,accn,end,form,targetDays){
   const candidates=[];
-  for(const tag of tags){
-    const f=facts?.["us-gaap"]?.[tag];
-    if(!f) continue;
-    for(const unit of Object.values(f.units||{})){
-      for(const x of unit){
-        if(x.accn!==accn || x.end!==end || !x.start) continue;
-        if(form && x.form!==form) continue;
-        const days=Math.round((new Date(x.end+"T00:00:00Z")-new Date(x.start+"T00:00:00Z"))/86400000);
-        if(days>0) candidates.push({value:num(x.val),tag,days,unit:x.unit});
+  for(const [taxonomy,taxonomyFacts] of Object.entries(facts||{})){
+    for(const tag of tags){
+      const f=taxonomyFacts?.[tag];
+      if(!f) continue;
+      for(const unit of Object.values(f.units||{})){
+        for(const x of unit){
+          if(x.accn!==accn || x.end!==end || !x.start) continue;
+          if(form && x.form!==form) continue;
+          const days=Math.round((new Date(x.end+"T00:00:00Z")-new Date(x.start+"T00:00:00Z"))/86400000);
+          if(days>0) candidates.push({value:num(x.val),tag,taxonomy,days,unit:x.unit});
+        }
       }
     }
   }
@@ -332,6 +334,41 @@ function durationFact(facts,tags,accn,end,form,targetDays){
     const da=Math.abs(a.days-targetDays), db=Math.abs(b.days-targetDays);
     return da-db;
   });
+  return candidates[0];
+}
+function instantFactByPattern(facts,patterns,accn,end){
+  const hits=[];
+  for(const [taxonomy,taxonomyFacts] of Object.entries(facts||{})){
+    for(const [tag,fact] of Object.entries(taxonomyFacts||{})){
+      if(!patterns.some(re=>re.test(String(tag)))) continue;
+      for(const unit of Object.values(fact?.units||{})){
+        for(const x of unit||[]){
+          if(x.accn===accn && (!end || x.end===end)) hits.push({value:num(x.val),tag,taxonomy,filed:x.filed});
+        }
+      }
+    }
+  }
+  hits.sort((a,b)=>String(b.filed||"").localeCompare(String(a.filed||"")));
+  return hits[0]||null;
+}
+function durationFactByPattern(facts,patterns,accn,end,form,targetDays){
+  const candidates=[];
+  for(const [taxonomy,taxonomyFacts] of Object.entries(facts||{})){
+    for(const [tag,fact] of Object.entries(taxonomyFacts||{})){
+      if(!patterns.some(re=>re.test(String(tag)))) continue;
+      for(const unit of Object.values(fact?.units||{})){
+        for(const x of unit||[]){
+          if(x.accn!==accn || x.end!==end || !x.start) continue;
+          if(form && x.form!==form) continue;
+          const days=Math.round((new Date(x.end+"T00:00:00Z")-new Date(x.start+"T00:00:00Z"))/86400000);
+          if(days>0) candidates.push({value:num(x.val),tag,taxonomy,days,unit:x.unit});
+        }
+      }
+    }
+  }
+  if(!candidates.length && form) return durationFactByPattern(facts,patterns,accn,end,null,targetDays);
+  if(!candidates.length) return null;
+  candidates.sort((a,b)=>Math.abs(a.days-targetDays)-Math.abs(b.days-targetDays));
   return candidates[0];
 }
 
@@ -436,13 +473,27 @@ async function scanWithFiling(found,sub,filing,facts){
       || text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s+shares issued and outstanding/i);
     if(m) shares=num(m[1]);
   }
-  const rev=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],filing.accn,end,filing.form,targetDays);
+  const rev=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],filing.accn,end,filing.form,targetDays)
+    || durationFactByPattern(facts,[/Revenue/i,/SalesRevenue/i],filing.accn,end,filing.form,targetDays);
   const revenue=rev?.value ?? rowNumber(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i]) ?? null;
-  const interest=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],filing.accn,end,filing.form,targetDays);
+  const interest=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],filing.accn,end,filing.form,targetDays)
+    || durationFactByPattern(facts,[/InterestIncome/i,/InvestmentIncomeInterest/i],filing.accn,end,filing.form,targetDays);
   const interestIncome=interest?.value ?? rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? null;
   const financingIncome=rowNumber(rows,[/^financing income(?:, net)?$/i,/^financing income$/i]);
   const interestCombined=rowNumber(rows,[/^interest income and unrealized gains from marketable securities$/i]);
   let debt=debtFromFacts(facts,filing.accn,end);
+  if(debt==null){
+    const currentGeneric=instantFactByPattern(facts,[/DebtCurrent$/i,/Current.*Debt/i],filing.accn,end)?.value;
+    const noncurrentGeneric=instantFactByPattern(facts,[/DebtNoncurrent$/i,/Noncurrent.*Debt/i],filing.accn,end)?.value;
+    if(currentGeneric!=null && noncurrentGeneric!=null) debt=currentGeneric+noncurrentGeneric;
+    else debt=instantFactByPattern(facts,[/Debt/i,/Borrowings/i,/NotesPayable/i],filing.accn,end)?.value ?? null;
+  }
+  if(debt==null){
+    const currentGeneric=instantFactByPattern(facts,[/DebtCurrent$/i,/Current.*Debt/i],filing.accn,end)?.value;
+    const noncurrentGeneric=instantFactByPattern(facts,[/DebtNoncurrent$/i,/Noncurrent.*Debt/i],filing.accn,end)?.value;
+    if(currentGeneric!=null && noncurrentGeneric!=null) debt=currentGeneric+noncurrentGeneric;
+    else debt=instantFactByPattern(facts,[/Debt/i,/Borrowings/i,/NotesPayable/i],filing.accn,end)?.value ?? null;
+  }
   if(debt==null) debt=rowNumber(rows,[/interest[- ]bearing debt/i,/short[- ]term debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/convertible debt/i,/notes? payable/i,/borrowings?/i]);
   if(debt==null){
     const debtCurrent=rowNumber(rows,[/^debt\s*[–—-]\s*current$/i]);
@@ -451,7 +502,8 @@ async function scanWithFiling(found,sub,filing,facts){
   }
   if(debt==null) debt=0;
   const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
-  const deposits=rowNumber(rows,[/interest[- ]bearing deposits?/i,/interest[- ]bearing deposit accounts?/i]);
+  const deposits=rowNumber(rows,[/interest[- ]bearing deposits?/i,/interest[- ]bearing deposit accounts?/i])
+    ?? instantFactByPattern(facts,[/InterestBearingDeposit/i,/DepositAccount/i],filing.accn,end)?.value;
   const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i]);
   const shortTermInvestments=rowNumber(rows,[/^short[- ]term investments$/i]);
   const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
@@ -559,14 +611,14 @@ async function scan(input){
     facts,
     ["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],
     filing.accn,end,filing.form,targetDays
-  );
+  ) || durationFactByPattern(facts,[/Revenue/i,/SalesRevenue/i],filing.accn,end,filing.form,targetDays);
   const revenue=rowNumber(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i]) ?? rev?.value ?? null;
 
   const interest=durationFact(
     facts,
     ["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],
     filing.accn,end,filing.form,targetDays
-  );
+  ) || durationFactByPattern(facts,[/InterestIncome/i,/InvestmentIncomeInterest/i],filing.accn,end,filing.form,targetDays);
   const interestIncome=rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? interest?.value ?? null;
 
   const financingIncome=rowNumber(rows,[/^financing income(?:, net)?$/i,/^financing income$/i]);
@@ -600,7 +652,7 @@ async function scan(input){
   const deposits=rowNumber(rows,[
     /interest[- ]bearing deposits?/i,
     /interest[- ]bearing deposit accounts?/i
-  ]);
+  ]) ?? instantFactByPattern(facts,[/InterestBearingDeposit/i,/DepositAccount/i],filing.accn,end)?.value;
 
   const cash=instantFact(facts,[
     "CashAndCashEquivalentsAtCarryingValue"
@@ -658,7 +710,7 @@ async function scan(input){
     revenue,
     debt,debtPct,
     deposits,depositsPct,
-    cash,marketableSecurities:moneyMarket,
+    cash,marketableSecurities:marketableSecurities ?? null,
     liquidityAssets,liquidityAssetsPct:depositsPct,
     interestIncome,prohibitedPct,
     financingIncome,financingPct,
