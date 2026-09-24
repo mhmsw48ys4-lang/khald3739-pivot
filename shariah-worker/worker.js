@@ -288,7 +288,7 @@ async function scanWithFiling(found,sub,filing,facts){
   if(debt==null) debt=rowNumber(rows,[/interest[- ]bearing debt/i,/short[- ]term debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/convertible debt/i,/notes? payable/i,/borrowings?/i]);
   if(debt==null) debt=0;
   const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
-  const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i]);
+  const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i,/^marketable securities$/i]);
   const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
   const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
   const liquidityAssets=liquidityInvestments;
@@ -422,7 +422,8 @@ async function scan(input){
 
   const moneyMarket=rowNumber(rows,[
     /money market mutual funds?/i,
-    /money market funds?/i
+    /money market funds?/i,
+    /^marketable securities$/i
   ]);
 
   const interestBearingInvestments=rowNumber(rows,[
