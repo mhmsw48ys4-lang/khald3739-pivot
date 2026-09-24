@@ -6,6 +6,50 @@ const CORS = {
 };
 
 const LIMITS = { debt: 30, deposits: 30, prohibited: 5 };
+const PRICE_MIN = 1;
+const PRICE_MAX = 8;
+const RANGE_BATCH = 20;
+
+async function yahooScreener(offset=0,size=RANGE_BATCH){
+  const body={
+    size:Math.min(Math.max(Number(size)||RANGE_BATCH,RANGE_BATCH),50),
+    offset:Math.max(Number(offset)||0,0),
+    sortField:"intradayprice",
+    sortType:"ASC",
+    quoteType:"EQUITY",
+    topOperator:"AND",
+    query:{
+      operator:"AND",
+      operands:[
+        {operator:"EQ",operands:["region","us"]},
+        {operator:"GTE",operands:["intradayprice",PRICE_MIN]},
+        {operator:"LTE",operands:["intradayprice",PRICE_MAX]}
+      ]
+    }
+  };
+  const r=await fetch("https://query1.finance.yahoo.com/v1/finance/screener?formatted=false&lang=en-US&region=US&corsDomain=finance.yahoo.com",{
+    method:"POST",
+    headers:{
+      "content-type":"application/json",
+      "accept":"application/json",
+      "user-agent":"Mozilla/5.0"
+    },
+    body:JSON.stringify(body)
+  });
+  if(!r.ok) throw Error("تعذر جلب قائمة الأسهم بين $1 و $8");
+  const j=await r.json();
+  const result=j?.finance?.result?.[0]||{};
+  const quotes=Array.isArray(result.quotes)?result.quotes:[];
+  return {
+    total:Number(result.total||0),
+    quotes:quotes.map(q=>({
+      symbol:q.symbol,
+      name:q.longName||q.shortName||q.symbol,
+      price:num(q.regularMarketPrice??q.intradayprice)
+    })).filter(q=>q.symbol && q.price!=null && q.price>=PRICE_MIN && q.price<=PRICE_MAX)
+  };
+}
+
 
 function json(data, status=200){
   return new Response(JSON.stringify(data), {
@@ -500,7 +544,7 @@ async function scan(input){
   const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
   tableScale = localTableScale;
 
-  const targetDays=filing.form.startsWith("10-K")?365:91;
+  const targetDays=filing.form.startsWith("10-K")||filing.form.startsWith("20-F")||filing.form.startsWith("40-F")?365:(filing.form==="6-K"?180:91);
   const end=filing.reportDate;
 
   let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
@@ -673,6 +717,7 @@ a{color:#69a7ff;text-decoration:none}
 <input id="symbol" placeholder="مثال MBOT" autocomplete="off">
 <button id="scanBtn" onclick="scanStock()">فحص</button>
 </div>
+<button id="rangeBtn" onclick="scanRange()" style="width:100%;margin-top:10px">فحص الأسهم من $1 إلى $8</button>
 <div id="out"></div>
 </main>
 <script>
@@ -686,6 +731,49 @@ function overall(x){
   if(x.overall===true)return '<div class="summary pass">النتيجة: جميع البنود المتاحة ضمن الحدود</div>';
   if(x.overall===false)return '<div class="summary fail">النتيجة: يوجد بند تجاوز الحد</div>';
   return '<div class="summary warn">النتيجة: تحتاج مراجعة — بعض البيانات غير متاحة</div>';
+}
+
+async function scanRange(){
+  const rb=document.getElementById("rangeBtn");
+  rb.disabled=true;
+  out.innerHTML='<div class="card loading">جاري اختيار الأسهم من $1 إلى $8 ثم فحص الدين والقيمة والودائع والدخل المحرم...</div>';
+  try{
+    const r=await fetch("/api/range-scan?offset=0&size=20",{cache:"no-store"});
+    const x=await r.json();
+    if(!r.ok)throw Error(x.error||"فشل فحص النطاق");
+    const good=x.results.filter(v=>v.overall===true);
+    const rows=x.results.map(v=>{
+      const overall=v.overall===true?"اجتاز":v.overall===false?"لم يجتز":"بيانات ناقصة";
+      return '<div class="row"><span class="label">'+esc(v.symbol)+' — '+esc(v.company||"")+'</span><span class="value">'+money(v.price)+' · '+overall+'</span></div>';
+    }).join("");
+    out.innerHTML='<div class="card">'+
+      '<div class="summary warn">نطاق الفحص: $1 إلى $8 — تم فحص '+x.results.length+' من أصل '+x.total+' سهم في هذه الدفعة</div>'+
+      '<div class="small">المعايير: الدين مقابل القيمة السوقية، الودائع بفائدة، والدخل المحرم.</div>'+
+      '<div style="margin-top:12px">'+rows+'</div>'+
+      (x.nextOffset!=null?'<button onclick="scanRangeNext('+x.nextOffset+')" style="width:100%;margin-top:14px">فحص الدفعة التالية</button>':"")+
+      '</div>';
+  }catch(e){
+    out.innerHTML='<div class="card"><div class="fail">'+esc(e.message)+'</div></div>';
+  }finally{rb.disabled=false}
+}
+async function scanRangeNext(offset){
+  const rb=document.getElementById("rangeBtn");
+  rb.disabled=true;
+  out.innerHTML='<div class="card loading">جاري فحص الدفعة التالية من أسهم $1–$8...</div>';
+  try{
+    const r=await fetch("/api/range-scan?offset="+encodeURIComponent(offset)+"&size=20",{cache:"no-store"});
+    const x=await r.json();
+    if(!r.ok)throw Error(x.error||"فشل الفحص");
+    const rows=x.results.map(v=>{
+      const overall=v.overall===true?"اجتاز":v.overall===false?"لم يجتز":"بيانات ناقصة";
+      return '<div class="row"><span class="label">'+esc(v.symbol)+' — '+esc(v.company||"")+'</span><span class="value">'+money(v.price)+' · '+overall+'</span></div>';
+    }).join("");
+    out.innerHTML='<div class="card"><div class="summary warn">تم فحص '+(x.offset+x.results.length)+' من أصل '+x.total+' سهم ضمن نطاق $1–$8</div>'+rows+
+      (x.nextOffset!=null?'<button onclick="scanRangeNext('+x.nextOffset+')" style="width:100%;margin-top:14px">فحص الدفعة التالية</button>':"")+
+      '</div>';
+  }catch(e){
+    out.innerHTML='<div class="card"><div class="fail">'+esc(e.message)+'</div></div>';
+  }finally{rb.disabled=false}
 }
 async function scanStock(){
   const s=input.value.trim().toUpperCase();
@@ -727,6 +815,37 @@ export default {
   async fetch(request){
     if(request.method==="OPTIONS") return new Response(null,{headers:CORS});
     const url=new URL(request.url);
+    if(url.pathname==="/api/range-scan"){
+      try{
+        const offset=Math.max(parseInt(url.searchParams.get("offset")||"0",10)||0,0);
+        const size=Math.min(Math.max(parseInt(url.searchParams.get("size")||String(RANGE_BATCH),10)||RANGE_BATCH,1),RANGE_BATCH);
+        const universe=await yahooScreener(offset,size);
+        const results=[];
+        for(let i=0;i<universe.quotes.length;i+=4){
+          const batch=universe.quotes.slice(i,i+4);
+          const scanned=await Promise.all(batch.map(async q=>{
+            try{
+              const x=await scan(q.symbol);
+              return {...x,rangePrice:q.price};
+            }catch(e){
+              return {symbol:q.symbol,company:q.name,price:q.price,error:e?.message||"فشل الفحص"};
+            }
+          }));
+          results.push(...scanned);
+        }
+        return json({
+          priceMin:PRICE_MIN,
+          priceMax:PRICE_MAX,
+          offset,
+          size:results.length,
+          total:universe.total,
+          nextOffset:offset+universe.quotes.length<universe.total?offset+universe.quotes.length:null,
+          results
+        });
+      }catch(e){
+        return json({error:e?.message||"فشل فحص نطاق $1-$8"},500);
+      }
+    }
     if(url.pathname==="/api/scan"){
       try{
         const symbol=(url.searchParams.get("symbol")||"").trim();
