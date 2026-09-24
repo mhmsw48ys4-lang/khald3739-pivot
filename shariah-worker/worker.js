@@ -31,8 +31,8 @@ function durationFact(facts,tags,accn,start,end,form){
   return null;
 }
 function stripTable(html){
-  const rows=[]; const re=/<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi; let m;
-  while((m=re.exec(html))){const cells=[];const cr=/<t[dh]\\b[^>]*>([\\s\\S]*?)<\\/t[dh]>/gi;let c;while((c=cr.exec(m[1])))cells.push(norm(c[1]));if(cells.length)rows.push(cells);}
+  const rows=[]; const re=/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi; let m;
+  while((m=re.exec(html))){const cells=[];const cr=/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;let c;while((c=cr.exec(m[1])))cells.push(norm(c[1]));if(cells.length)rows.push(cells);}
   return rows;
 }
 function rowValue(rows,patterns){
@@ -40,7 +40,7 @@ function rowValue(rows,patterns){
     if(!r[0])continue;
     if(patterns.some(p=>p.test(r[0]))){
       for(let i=1;i<r.length;i++){
-        const s=r[i].replace(/\\$/g,"").replace(/,/g,"").replace(/\\(([^)]+)\\)/,"-$1").trim();
+        const s=r[i].replace(/\$/g,"").replace(/,/g,"").replace(/\(([^)]+)\)/,"-$1").trim();
         const n=Number(s); if(Number.isFinite(n))return n;
       }
     }
