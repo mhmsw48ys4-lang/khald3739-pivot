@@ -58,7 +58,7 @@ function filingFromFacts(facts){
     for(const fact of Object.values(taxonomy||{})){
       for(const units of Object.values(fact?.units||{})){
         for(const x of units||[]){
-          if((x.form==="10-Q" || x.form==="10-K") && x.accn && x.filed && x.end){
+          if(["10-Q","10-Q/A","10-K","10-K/A","20-F","20-F/A","40-F","40-F/A","6-K"].includes(x.form) && x.accn && x.filed && x.end){
             const key=x.accn;
             if(!seen.has(key)){
               seen.set(key,{form:x.form,accn:x.accn,filingDate:x.filed,reportDate:x.end,doc:null});
@@ -96,6 +96,39 @@ async function archivePrimaryDocument(cik,accn,form){
     }
   }catch{}
   return "";
+}
+
+
+async function filingHtmlDocuments(cik,accn,form,primaryUrl){
+  const base="https://www.sec.gov/Archives/edgar/data/"+Number(cik)+"/"+accn.replace(/-/g,"")+"/";
+  const urls=[];
+  if(primaryUrl) urls.push(primaryUrl);
+  try{
+    const r=await sec(base+"index.json");
+    if(r.ok){
+      const j=await r.json();
+      const items=Array.isArray(j?.directory?.item)?j.directory.item:[];
+      const names=items.map(x=>x?.name).filter(Boolean)
+        .filter(n=>/\.htm$/i.test(n))
+        .filter(n=>!/-index\.htm$/i.test(n))
+        .filter(n=>!/^ixviewer/i.test(n));
+      // Foreign private issuers often place the financial statements in
+      // EX-99.1/EX-99.2 rather than inside the 6-K cover document.
+      for(const n of names){
+        if(n===primaryUrl.split("/").pop()) continue;
+        if(/ex99/i.test(n) || /financial|statement|20f|40f|10q|10k/i.test(n)) urls.push(base+n);
+      }
+    }
+  }catch{}
+  const unique=[...new Set(urls)].slice(0,8);
+  const parts=[];
+  for(const u of unique){
+    try{
+      const r=await sec(u);
+      if(r.ok) parts.push(await r.text());
+    }catch{}
+  }
+  return parts.join("\n");
 }
 
 async function getCik(symbol){
@@ -331,11 +364,7 @@ async function marketPrice(symbol){
 
 async function scanWithFiling(found,sub,filing,facts){
   const filingUrl=filing.doc || ("https://www.sec.gov/Archives/edgar/data/"+Number(found.cik)+"/"+filing.accn.replace(/-/g,"")+"/");
-  let html="";
-  try{
-    const fr=await sec(filingUrl);
-    if(fr.ok) html=await fr.text();
-  }catch{}
+  const html=await filingHtmlDocuments(found.cik,filing.accn,filing.form,filingUrl);
   const rows=tableRows(html);
   const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
   tableScale = localTableScale;
@@ -420,19 +449,33 @@ async function scan(input){
     throw Error("تعذر قراءة إفصاحات الشركة");
   }
   const sub=await subR.json();
-  const filing=chooseFiling(sub.filings?.recent||{});
-  if(!filing) throw Error("لا يوجد 10-Q أو 10-K حديث");
+  let filing=chooseFiling(sub.filings?.recent||{});
 
+  // Foreign private issuers such as NTCL and PN commonly publish interim
+  // financial statements through Form 6-K exhibits instead of 10-Q.
+  // If no periodic 10-Q/10-K/20-F filing exists, use the latest SEC XBRL
+  // filing that actually carries financial facts (including 6-K).
   const cfR=await sec("https://data.sec.gov/api/xbrl/companyfacts/CIK"+found.cik+".json");
   if(!cfR.ok) throw Error("تعذر قراءة بيانات XBRL");
   const facts=(await cfR.json()).facts||{};
 
+  if(!filing){
+    const fallbackFiling=filingFromFacts(facts);
+    if(fallbackFiling){
+      const fallbackDoc=await archivePrimaryDocument(found.cik,fallbackFiling.accn,fallbackFiling.form);
+      filing={
+        form:fallbackFiling.form,
+        accn:fallbackFiling.accn,
+        filingDate:fallbackFiling.filingDate,
+        reportDate:fallbackFiling.reportDate,
+        doc:fallbackDoc
+      };
+    }
+  }
+  if(!filing) throw Error("لا يوجد إفصاح مالي حديث يمكن قراءته");
+
   const filingUrl=filing.doc || ("https://www.sec.gov/Archives/edgar/data/"+Number(found.cik)+"/"+filing.accn.replace(/-/g,"")+"/");
-  let html="";
-  try{
-    const fr=await sec(filingUrl);
-    if(fr.ok) html=await fr.text();
-  }catch{}
+  const html=await filingHtmlDocuments(found.cik,filing.accn,filing.form,filingUrl);
   const rows=tableRows(html);
   // SEC financial tables for MBOT are reported in thousands of U.S. dollars.
   // Keep XBRL values as-is; scale only values extracted from HTML tables.
