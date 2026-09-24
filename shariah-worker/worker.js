@@ -247,17 +247,25 @@ async function scan(input){
   const interestIncome=rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? interest?.value ?? null;
 
   const financingIncome=rowNumber(rows,[/^financing income(?:, net)?$/i,/^financing income$/i]);
+  const interestCombined=rowNumber(rows,[
+    /^interest income and unrealized gains from marketable securities$/i
+  ]);
 
   let debt=debtFromFacts(facts,filing.accn,end);
   if(debt==null){
     debt=rowNumber(rows,[
       /interest[- ]bearing debt/i,
+      /short[- ]term debt/i,
       /long[- ]term debt/i,
       /convertible notes? payable/i,
+      /convertible debt/i,
       /notes? payable/i,
-      /lease liabilities/i
+      /borrowings?/i
     ]);
   }
+  // Lease liabilities are operating-lease obligations and are not used as the
+  // interest-bearing debt numerator by this screen.
+  if(debt==null) debt=0;
 
   const deposits=rowNumber(rows,[
     /interest[- ]bearing deposits?/i,
@@ -265,11 +273,37 @@ async function scan(input){
     /interest[- ]bearing investments?/i
   ]);
 
+  // AAOIFI liquidity screen: cash + clearly interest-bearing short-term investments.
+  // Do not treat ordinary lease liabilities as interest-bearing debt.
+  const cash=instantFact(facts,[
+    "CashAndCashEquivalentsAtCarryingValue"
+  ],filing.accn,end)?.value
+    ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
+
+  const moneyMarket=rowNumber(rows,[
+    /money market mutual funds?/i,
+    /money market funds?/i
+  ]);
+
+  const interestBearingInvestments=rowNumber(rows,[
+    /interest[- ]bearing securities/i,
+    /interest[- ]bearing investments?/i,
+    /treasury bills?/i,
+    /government securities/i,
+    /certificates? of deposit/i,
+    /commercial paper/i,
+    /corporate bonds?/i
+  ]);
+
+  const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
+  const liquidityAssets=(cash??0)+(liquidityInvestments??0);
+  const liquidityKnown=cash!=null || liquidityInvestments!=null;
+
   const price=await marketPrice(found.ticker);
   const marketCap=price!=null && shares!=null ? price*shares : null;
 
   const debtPct=pct(debt,marketCap);
-  const depositsPct=pct(deposits,marketCap);
+  const depositsPct=liquidityKnown ? pct(liquidityAssets,marketCap) : null;
   const prohibitedPct=pct(interestIncome,revenue);
   const financingPct=pct(financingIncome,revenue);
 
@@ -295,11 +329,14 @@ async function scan(input){
     revenue,
     debt,debtPct,
     deposits,depositsPct,
+    cash,marketableSecurities:moneyMarket,
+    liquidityAssets,liquidityAssetsPct:depositsPct,
     interestIncome,prohibitedPct,
     financingIncome,financingPct,
     checks,
     overall,
     limits:LIMITS,
+    interestCombined,
     periodDays:rev?.days ?? interest?.days ?? null,
     source:"SEC EDGAR + Yahoo Finance",
     note: interestIncome==null
@@ -381,10 +418,13 @@ async function scanStock(){
       '<div class="row"><span class="label">السعر</span><span class="value">'+money(x.price)+'</span></div>'+
       '<div class="row"><span class="label">عدد الأسهم</span><span class="value">'+(x.shares==null?"بيانات غير كافية":Number(x.shares).toLocaleString())+'</span></div>'+
       '<div class="row"><span class="label">القيمة السوقية</span><span class="value">'+money(x.marketCap)+'</span></div>'+
-      '<div class="row"><span class="label">الدين</span><span class="value">'+money(x.debt)+' — '+percent(x.debtPct)+' '+status(x.checks.debt)+'</span></div>'+
-      '<div class="row"><span class="label">ودائع بفائدة معلنة</span><span class="value">'+money(x.deposits)+' — '+percent(x.depositsPct)+' '+status(x.checks.deposits)+'</span></div>'+
+      '<div class="row"><span class="label">الدين بفائدة</span><span class="value">'+money(x.debt)+' — '+percent(x.debtPct)+' '+status(x.checks.debt)+'</span></div>'+
+      '<div class="row"><span class="label">النقد + الاستثمارات بفائدة</span><span class="value">'+money(x.liquidityAssets)+' — '+percent(x.liquidityAssetsPct)+' '+status(x.checks.deposits)+'</span></div>'+
+      '<div class="row"><span class="label">النقد</span><span class="value">'+money(x.cash)+'</span></div>'+
+      '<div class="row"><span class="label">استثمارات سوق نقدية معلنة</span><span class="value">'+money(x.marketableSecurities)+'</span></div>'+
       '<div class="row"><span class="label">الإيرادات</span><span class="value">'+money(x.revenue)+'</span></div>'+
       '<div class="row"><span class="label">دخل فوائد مستقل</span><span class="value">'+money(x.interestIncome)+' — '+percent(x.prohibitedPct)+' '+status(x.checks.prohibited)+'</span></div>'+
+      '<div class="row"><span class="label">دخل فوائد + مكاسب غير محققة (مجمّع)</span><span class="value">'+money(x.interestCombined)+'</span></div>'+
       '<div class="row"><span class="label">دخل التمويل (مؤشر)</span><span class="value">'+money(x.financingIncome)+' — '+percent(x.financingPct)+'</span></div>'+
       '<p class="note">'+esc(x.note)+'</p>'+
       '<p class="small">الحدود المستخدمة: الدين '+x.limits.debt+'%، الودائع '+x.limits.deposits+'%، الدخل المحرم '+x.limits.prohibited+'%. هذه أداة فحص وليست فتوى.</p>'+
