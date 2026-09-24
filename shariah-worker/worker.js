@@ -259,10 +259,88 @@ async function marketPrice(symbol){
   return null;
 }
 
+async function scanWithFiling(found,sub,filing,facts){
+  const filingUrl=filing.doc || ("https://www.sec.gov/Archives/edgar/data/"+Number(found.cik)+"/"+filing.accn.replace(/-/g,"")+"/");
+  let html="";
+  try{
+    const fr=await sec(filingUrl);
+    if(fr.ok) html=await fr.text();
+  }catch{}
+  const rows=tableRows(html);
+  const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
+  tableScale = localTableScale;
+  const targetDays=filing.form==="10-K"?365:91;
+  const end=filing.reportDate;
+  let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
+  if(shares==null){
+    const text=clean(html);
+    const m=text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s+shares of common stock/i)
+      || text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s+shares issued and outstanding/i);
+    if(m) shares=num(m[1]);
+  }
+  const rev=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],filing.accn,end,filing.form,targetDays);
+  const revenue=rowNumber(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i]) ?? rev?.value ?? null;
+  const interest=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],filing.accn,end,filing.form,targetDays);
+  const interestIncome=rowNumber(rows,[/^interest income(?:, net)?$/i,/^interest income$/i]) ?? interest?.value ?? null;
+  const financingIncome=rowNumber(rows,[/^financing income(?:, net)?$/i,/^financing income$/i]);
+  const interestCombined=rowNumber(rows,[/^interest income and unrealized gains from marketable securities$/i]);
+  let debt=debtFromFacts(facts,filing.accn,end);
+  if(debt==null) debt=rowNumber(rows,[/interest[- ]bearing debt/i,/short[- ]term debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/convertible debt/i,/notes? payable/i,/borrowings?/i]);
+  if(debt==null) debt=0;
+  const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
+  const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i]);
+  const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
+  const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
+  const liquidityAssets=liquidityInvestments;
+  const liquidityKnown=liquidityInvestments!=null;
+  const price=await marketPrice(found.ticker);
+  const marketCap=price!=null && shares!=null ? price*shares : null;
+  const debtPct=pct(debt,marketCap);
+  const depositsPct=liquidityKnown ? pct(liquidityAssets,marketCap) : null;
+  const prohibitedPct=pct(interestIncome,revenue);
+  const financingPct=pct(financingIncome,revenue);
+  const checks={debt:debtPct==null?null:debtPct<=LIMITS.debt,deposits:depositsPct==null?null:depositsPct<=LIMITS.deposits,prohibited:prohibitedPct==null?null:prohibitedPct<=LIMITS.prohibited};
+  const known=Object.values(checks).filter(v=>v!==null);
+  return {
+    symbol:found.ticker,requestedSymbol:upper(filing.requestedSymbol||found.ticker),company:sub?.name||found.name,
+    form:filing.form,filingDate:filing.filingDate,reportDate:filing.reportDate,accession:filing.accn,filingUrl,
+    price,shares,marketCap,revenue,debt,debtPct,deposits:liquidityAssets,depositsPct,cash,marketableSecurities:moneyMarket,
+    liquidityAssets,liquidityAssetsPct:depositsPct,interestIncome,prohibitedPct,financingIncome,financingPct,checks,
+    overall:known.length===3?known.every(Boolean):null,limits:LIMITS,interestCombined,periodDays:rev?.days ?? interest?.days ?? null,
+    source:"SEC EDGAR + Yahoo Finance",
+    note:interestIncome==null?(financingIncome!=null?"لم يظهر رقم مستقل لدخل الفوائد؛ دخل التمويل المعروض مؤشر بديل ولا يُستخدم للحكم النهائي على بند الدخل المحرم.":"لم يظهر رقم مستقل واضح لدخل الفوائد في الإفصاح."):"نسبة الدخل المحرم محسوبة من دخل الفوائد المستقل ÷ الإيرادات."
+  };
+}
+
 async function scan(input){
   const found=await getCik(input);
-  const subR=await sec("https://data.sec.gov/submissions/CIK"+found.cik+".json");
-  if(!subR.ok) throw Error("تعذر قراءة إفصاحات الشركة");
+  // Cloudflare can intermittently fail data.sec.gov while www.sec.gov remains reachable.
+  // Try the official submissions endpoint on both SEC hosts before failing.
+  let subR=await sec("https://data.sec.gov/submissions/CIK"+found.cik+".json");
+  if(!subR.ok){
+    subR=await sec("https://www.sec.gov/submissions/CIK"+found.cik+".json");
+  }
+  if(!subR.ok){
+    // Last fallback: derive the latest filing from companyfacts when submissions is unavailable.
+    const fallbackFacts=await sec("https://data.sec.gov/api/xbrl/companyfacts/CIK"+found.cik+".json");
+    if(fallbackFacts.ok){
+      const fallbackJson=await fallbackFacts.json();
+      const fallbackFiling=filingFromFacts(fallbackJson?.facts||{});
+      if(fallbackFiling){
+        const fallbackDoc=await archivePrimaryDocument(found.cik,fallbackFiling.accn,fallbackFiling.form);
+        const sub={name:found.name,filings:{recent:{}}};
+        const filing={
+          form:fallbackFiling.form,
+          accn:fallbackFiling.accn,
+          filingDate:fallbackFiling.filingDate,
+          reportDate:fallbackFiling.reportDate,
+          doc:fallbackDoc
+        };
+        return await scanWithFiling(found,sub,filing,fallbackJson.facts||{});
+      }
+    }
+    throw Error("تعذر قراءة إفصاحات الشركة");
+  }
   const sub=await subR.json();
   const filing=chooseFiling(sub.filings?.recent||{});
   if(!filing) throw Error("لا يوجد 10-Q أو 10-K حديث");
