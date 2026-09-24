@@ -51,7 +51,9 @@ function rowValue(rows,patterns){
 async function sec(url){return fetch(url,{headers:{"User-Agent":SEC_UA,"Accept-Encoding":"gzip, deflate"}});}
 async function getCik(symbol){
   const r=await sec("https://www.sec.gov/files/company_tickers.json"); if(!r.ok)throw Error("SEC ticker lookup failed");
-  const j=await r.json(); const s=symbol.toUpperCase();
+  const j=await r.json(); let s=symbol.toUpperCase();
+  // Common typo: MBTO -> MBOT (Microbot Medical)
+  if(s==="MBTO")s="MBOT";
   for(const x of Object.values(j))if(String(x.ticker).toUpperCase()===s)return String(x.cik_str).padStart(10,"0");
   throw Error("Ticker not found in SEC");
 }
