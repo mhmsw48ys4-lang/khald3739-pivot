@@ -91,7 +91,7 @@ async function scan(symbol){
     interestIncome:interest,interestPct:pct(interest,revenue),revenue,
     checks:{
       debt:debtPct(debt,marketCap,30),
-      deposits:deposits==null?null:depositsPct(deposits,marketCap)<=30,
+      deposits:deposits==null?null:pct(deposits,marketCap)<=30,
       prohibited:interest==null||revenue==null?null:interestPct(interest,revenue)<=5
     },
     note: interest==null ? "لم يظهر إفصاح مستقل واضح عن دخل الفوائد في هذا التقرير؛ لذلك لا نحكم على بند الدخل المحرم." : null
