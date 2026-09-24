@@ -33,13 +33,69 @@ function clean(s){
 function upper(s){ return String(s||"").trim().toUpperCase(); }
 
 async function sec(url){
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": SEC_UA,
-      "Accept":"application/json,text/html;q=0.9,*/*;q=0.8"
+  let last=null;
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      const r=await fetch(url, {
+        headers: {
+          "User-Agent": SEC_UA,
+          "Accept":"application/json,text/html;q=0.9,*/*;q=0.8",
+          "Accept-Language":"en-US,en;q=0.9"
+        }
+      });
+      if(r.ok) return r;
+      last=r;
+      if(r.status!==403 && r.status!==429 && r.status<500) return r;
+    }catch(e){ last=null; }
+    await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));
+  }
+  return last || new Response("SEC request failed",{status:503});
+}
+
+function filingFromFacts(facts){
+  const seen=new Map();
+  for(const taxonomy of Object.values(facts||{})){
+    for(const fact of Object.values(taxonomy||{})){
+      for(const units of Object.values(fact?.units||{})){
+        for(const x of units||[]){
+          if((x.form==="10-Q" || x.form==="10-K") && x.accn && x.filed && x.end){
+            const key=x.accn;
+            if(!seen.has(key)){
+              seen.set(key,{form:x.form,accn:x.accn,filingDate:x.filed,reportDate:x.end,doc:null});
+            }else{
+              const old=seen.get(key);
+              if(x.filed>old.filingDate) old.filingDate=x.filed;
+            }
+          }
+        }
+      }
     }
-  });
-  return r;
+  }
+  const arr=[...seen.values()].sort((a,b)=>String(b.filingDate).localeCompare(String(a.filingDate)));
+  return arr[0]||null;
+}
+
+async function archivePrimaryDocument(cik,accn,form){
+  const base="https://www.sec.gov/Archives/edgar/data/"+Number(cik)+"/"+accn.replace(/-/g,"")+"/";
+  try{
+    const r=await sec(base+"index.json");
+    if(r.ok){
+      const j=await r.json();
+      const items=Array.isArray(j?.directory?.item)?j.directory.item:[];
+      const candidates=items
+        .map(x=>x.name)
+        .filter(Boolean)
+        .filter(n=>/\.htm$/i.test(n))
+        .filter(n=>!/-index\.htm$/i.test(n))
+        .filter(n=>!/^ex\d/i.test(n))
+        .filter(n=>!/^ixviewer/i.test(n));
+      const preferred=form==="10-K"
+        ? candidates.find(n=>/10-k/i.test(n))
+        : candidates.find(n=>/10-q/i.test(n));
+      return base+(preferred||candidates[0]||"");
+    }
+  }catch{}
+  return "";
 }
 
 async function getCik(symbol){
@@ -215,7 +271,7 @@ async function scan(input){
   if(!cfR.ok) throw Error("تعذر قراءة بيانات XBRL");
   const facts=(await cfR.json()).facts||{};
 
-  const filingUrl="https://www.sec.gov/Archives/edgar/data/"+Number(found.cik)+"/"+filing.accn.replace(/-/g,"")+"/"+filing.doc;
+  const filingUrl=filing.doc || ("https://www.sec.gov/Archives/edgar/data/"+Number(found.cik)+"/"+filing.accn.replace(/-/g,"")+"/");
   let html="";
   try{
     const fr=await sec(filingUrl);
@@ -328,7 +384,7 @@ async function scan(input){
   return {
     symbol:found.ticker,
     requestedSymbol:upper(input),
-    company:sub.name||found.name,
+    company:sub?.name||found.name,
     form:filing.form,
     filingDate:filing.filingDate,
     reportDate:filing.reportDate,
