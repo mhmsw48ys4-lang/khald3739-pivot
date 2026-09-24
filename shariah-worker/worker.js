@@ -13,7 +13,8 @@ function pickFact(facts,tags,accn,end,form){
     const f=facts?.["us-gaap"]?.[tag]||facts?.dei?.[tag];
     if(!f)continue;
     const units=Object.values(f.units||{}).flat();
-    const hit=units.filter(x=>x.accn===accn && (!form||x.form===form) && (!end||x.end===end));
+    let hit=units.filter(x=>x.accn===accn && (!end||x.end===end));
+    if(form) { const same=hit.filter(x=>x.form===form); if(same.length) hit=same; }
     if(hit.length)return hit.sort((a,b)=>String(b.filed).localeCompare(String(a.filed)))[0];
   }
   return null;
@@ -23,10 +24,11 @@ function instantFact(facts,tags,accn,end,form){
 }
 function durationFact(facts,tags,accn,start,end,form){
   for(const tag of tags){
-    const f=facts?.["us-gaap"]?.[tag];
-    if(!f)continue;
+    const f=facts?.["us-gaap"]?.[tag]; if(!f)continue;
     const units=Object.values(f.units||{}).flat();
-    const hits=units.filter(x=>x.accn===accn&&(!form||x.form===form)&&x.start===start&&x.end===end);
+    let hits=units.filter(x=>x.accn===accn&&x.end===end&&(!start||x.start===start));
+    if(form){const same=hits.filter(x=>x.form===form);if(same.length)hits=same;}
+    if(!hits.length) hits=units.filter(x=>x.accn===accn&&x.end===end&&(!form||x.form===form));
     if(hits.length)return hits.sort((a,b)=>String(b.filed).localeCompare(String(a.filed)))[0];
   }
   return null;
@@ -71,13 +73,13 @@ async function scan(symbol){
   let rows=[]; try{const fr=await sec(filingUrl);if(fr.ok)rows=stripTable(await fr.text());}catch{}
   const end=reportDate;
   const shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],accn,null,form)??instantFact(facts,["EntityCommonStockSharesOutstanding"],accn,end,form);
-  const revenueFact=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],accn,findStart(facts,accn,end,form),end,form);
+  const revenueFact=durationFact(facts,["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","SalesRevenueNet","SalesRevenueGoodsNet"],accn,null,end,form);
   const revenue=rowValue(rows,[/^revenues?$/i,/^sales$/i,/^net sales$/i])??(revenueFact?.val!=null?money(revenueFact.val):null);
-  const interestFact=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],accn,findStart(facts,accn,end,form),end,form);
+  const interestFact=durationFact(facts,["InterestIncomeNonoperating","InterestIncome","InvestmentIncomeInterest"],accn,null,end,form);
   const interest=rowValue(rows,[/^interest income(?:, net)?$/i])??(interestFact?.val!=null?money(interestFact.val):null);
-  const debtFact=instantFact(facts,["LongTermDebtCurrent","LongTermDebtNoncurrent","LongTermDebt","LongTermDebtAndFinanceLeaseObligationsCurrent","LongTermDebtAndFinanceLeaseObligationsNoncurrent"],accn,end,form);
+  const debtFact=instantFact(facts,["LongTermDebtCurrent","LongTermDebtNoncurrent","LongTermDebt","LongTermDebtAndFinanceLeaseObligationsCurrent","LongTermDebtAndFinanceLeaseObligationsNoncurrent","ConvertibleNotesPayableCurrent","ConvertibleNotesPayableNoncurrent","ConvertibleNotesPayable"],accn,end,form);
   const debt=rowValue(rows,[/interest[- ]bearing debt/i,/long[- ]term debt/i,/convertible notes? payable/i,/notes? payable/i])??debtFact;
-  const deposits=rowValue(rows,[/^interest[- ]bearing deposits?$/i,/^interest[- ]bearing securities$/i,/^interest[- ]bearing investments?$/i]);
+  const deposits=rowValue(rows,[/interest[- ]bearing deposits?/i,/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/restricted deposit/i]);
   let price=null;
   try{const yr=await fetch("https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(symbol)+"?range=1d&interval=1d");if(yr.ok){const y=await yr.json();price=money(y.chart?.result?.[0]?.meta?.regularMarketPrice);}}catch{}
   const marketCap=price!=null&&shares!=null?price*shares:null;
