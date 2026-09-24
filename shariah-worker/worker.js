@@ -297,8 +297,7 @@ function debtFromFacts(facts,accn,end){
   ];
   const current=instantFact(facts,currentTags,accn,end)?.value;
   const noncurrent=instantFact(facts,noncurrentTags,accn,end)?.value;
-  const split=sumUnique([current,noncurrent]);
-  if(split!=null) return split;
+  if(current!=null && noncurrent!=null) return current+noncurrent;
 
   const totalTags=[
     "LongTermDebtAndFinanceLeaseObligations",
