@@ -474,16 +474,19 @@ async function scan(input){
   if(!cfR.ok) throw Error("تعذر قراءة بيانات XBRL");
   const facts=(await cfR.json()).facts||{};
 
-  if(!filing){
-    const fallbackFiling=filingFromFacts(facts);
-    if(fallbackFiling){
-      const fallbackDoc=await archivePrimaryDocument(found.cik,fallbackFiling.accn,fallbackFiling.form);
+  {
+    const factFiling=filingFromFacts(facts);
+    // For foreign private issuers, the latest financial filing is often a
+    // 6-K while the latest 20-F is annual and can be much older.
+    // Prefer a newer financial 6-K/20-F found in XBRL over a stale annual form.
+    if(factFiling && (!filing || String(factFiling.filingDate||"")>String(filing.filingDate||""))){
+      const factDoc=await archivePrimaryDocument(found.cik,factFiling.accn,factFiling.form);
       filing={
-        form:fallbackFiling.form,
-        accn:fallbackFiling.accn,
-        filingDate:fallbackFiling.filingDate,
-        reportDate:fallbackFiling.reportDate,
-        doc:fallbackDoc
+        form:factFiling.form,
+        accn:factFiling.accn,
+        filingDate:factFiling.filingDate,
+        reportDate:factFiling.reportDate,
+        doc:factDoc
       };
     }
   }
