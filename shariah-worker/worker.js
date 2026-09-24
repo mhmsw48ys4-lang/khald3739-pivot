@@ -437,7 +437,8 @@ async function scan(input){
     /corporate bonds?/i
   ]);
 
-  const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
+  const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
+  const liquidityInvestments=liquidityFact ?? moneyMarket ?? interestBearingInvestments;
   // Cash itself is not an interest-taking deposit. Keep it separate.
   // The AAOIFI 30% test is specifically for interest-taking deposits;
   // marketable money-market funds are shown separately as an interest-linked investment asset.
