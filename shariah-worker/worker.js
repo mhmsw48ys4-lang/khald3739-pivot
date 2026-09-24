@@ -302,8 +302,11 @@ async function scan(input){
   ]);
 
   const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
-  const liquidityAssets=(cash??0)+(liquidityInvestments??0);
-  const liquidityKnown=cash!=null || liquidityInvestments!=null;
+  // Cash itself is not an interest-taking deposit. Keep it separate.
+  // The AAOIFI 30% test is specifically for interest-taking deposits;
+  // marketable money-market funds are shown separately as an interest-linked investment asset.
+  const liquidityAssets=liquidityInvestments;
+  const liquidityKnown=liquidityInvestments!=null;
 
   const price=await marketPrice(found.ticker);
   const marketCap=price!=null && shares!=null ? price*shares : null;
@@ -425,7 +428,7 @@ async function scanStock(){
       '<div class="row"><span class="label">عدد الأسهم</span><span class="value">'+(x.shares==null?"بيانات غير كافية":Number(x.shares).toLocaleString())+'</span></div>'+
       '<div class="row"><span class="label">القيمة السوقية</span><span class="value">'+money(x.marketCap)+'</span></div>'+
       '<div class="row"><span class="label">الدين بفائدة</span><span class="value">'+money(x.debt)+' — '+percent(x.debtPct)+' '+status(x.checks.debt)+'</span></div>'+
-      '<div class="row"><span class="label">النقد + الاستثمارات بفائدة</span><span class="value">'+money(x.liquidityAssets)+' — '+percent(x.liquidityAssetsPct)+' '+status(x.checks.deposits)+'</span></div>'+
+      '<div class="row"><span class="label">استثمارات/ودائع ذات عائد معلنة</span><span class="value">'+money(x.liquidityAssets)+' — '+percent(x.liquidityAssetsPct)+' '+status(x.checks.deposits)+'</span></div>'+
       '<div class="row"><span class="label">النقد</span><span class="value">'+money(x.cash)+'</span></div>'+
       '<div class="row"><span class="label">استثمارات سوق نقدية معلنة</span><span class="value">'+money(x.marketableSecurities)+'</span></div>'+
       '<div class="row"><span class="label">الإيرادات</span><span class="value">'+money(x.revenue)+'</span></div>'+
@@ -433,7 +436,7 @@ async function scanStock(){
       '<div class="row"><span class="label">دخل فوائد + مكاسب غير محققة (مجمّع)</span><span class="value">'+money(x.interestCombined)+'</span></div>'+
       '<div class="row"><span class="label">دخل التمويل (مؤشر)</span><span class="value">'+money(x.financingIncome)+' — '+percent(x.financingPct)+'</span></div>'+
       '<p class="note">'+esc(x.note)+'</p>'+
-      '<p class="small">الحدود المستخدمة: الدين '+x.limits.debt+'%، الودائع '+x.limits.deposits+'%، الدخل المحرم '+x.limits.prohibited+'%. هذه أداة فحص وليست فتوى.</p>'+
+      '<p class="small">الحدود المستخدمة: الدين '+x.limits.debt+'%، الودائع '+x.limits.deposits+'%، الدخل المحرم '+x.limits.prohibited+'%. النقد لا يدخل في نسبة الودائع؛ والاستثمارات ذات العائد تعرض كبند مستقل للمراجعة. هذه أداة فحص وليست فتوى.</p>'+
       '<p class="small"><a href="'+esc(x.filingUrl)+'" target="_blank" rel="noopener">فتح الإفصاح الرسمي في SEC</a></p>'+
       '</div>';
   }catch(e){
