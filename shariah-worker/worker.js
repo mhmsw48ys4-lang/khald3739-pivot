@@ -163,6 +163,25 @@ async function getCik(symbol){
     }
   }
 
+  // Final SEC fallback: use EDGAR's company-search endpoint, which accepts
+  // a company name, ticker symbol, or CIK in its search interface.
+  try{
+    const searchUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&output=xml&CIK="+encodeURIComponent(target);
+    const sr=await sec(searchUrl);
+    if(sr.ok){
+      const xml=await sr.text();
+      const m=xml.match(/<CIK>\s*(\d+)\s*<\/CIK>/i);
+      if(m){
+        const n=xml.match(/<CONFORMED-NAME>\s*([^<]+)\s*<\/CONFORMED-NAME>/i);
+        return {
+          cik:String(m[1]).padStart(10,"0"),
+          ticker:target,
+          name:clean(n?.[1]||target)
+        };
+      }
+    }
+  }catch{}
+
   throw Error("السهم غير موجود في خرائط SEC الحالية");
 }
 
