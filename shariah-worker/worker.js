@@ -102,32 +102,67 @@ async function getCik(symbol){
   const requested = upper(symbol);
   const aliases = {MBTO:"MBOT"};
   const target = aliases[requested] || requested;
-  // Use both SEC ticker maps. The exchange file is broader and helps with
-  // symbols that are missing from the basic company_tickers.json map.
-  const urls=[
-    "https://www.sec.gov/files/company_tickers_exchange.json",
-    "https://www.sec.gov/files/company_tickers.json"
-  ];
-  for(const u of urls){
-    const r=await sec(u);
-    if(!r.ok) continue;
-    const j=await r.json();
-    const values=Array.isArray(j?.data)
-      ? j.data
-      : Object.values(j||{});
-    for(const x of values){
-      const ticker=upper(x.ticker);
-      if(ticker===target || ticker.replace(/[-.]/g,"")===target.replace(/[-.]/g,"")){
-        const cik=x.cik_str ?? x.cik;
-        if(cik==null) continue;
+  const normalizedTarget = target.replace(/[-.]/g,"");
+
+  // SEC publishes three useful ticker/CIK maps. ticker.txt is the broad
+  // ticker-to-CIK map used by EDGAR search; the exchange JSON has a
+  // different array-based shape; company_tickers.json is the legacy object map.
+  const tickerTxt=await sec("https://www.sec.gov/include/ticker.txt");
+  if(tickerTxt.ok){
+    const text=await tickerTxt.text();
+    for(const line of text.split(/\r?\n/)){
+      const parts=line.trim().split(/\s+/);
+      if(parts.length<2) continue;
+      const ticker=upper(parts[0]);
+      if(ticker===target || ticker.replace(/[-.]/g,"")===normalizedTarget){
         return {
-          cik:String(cik).padStart(10,"0"),
+          cik:String(parts[1]).padStart(10,"0"),
           ticker:target,
-          name:x.title || x.name || target
+          name:target
         };
       }
     }
   }
+
+  const exchangeR=await sec("https://www.sec.gov/files/company_tickers_exchange.json");
+  if(exchangeR.ok){
+    const j=await exchangeR.json();
+    const fields=Array.isArray(j?.fields)?j.fields:[];
+    const rows=Array.isArray(j?.data)?j.data:[];
+    const tickerIndex=fields.indexOf("ticker");
+    const cikIndex=fields.indexOf("cik");
+    const nameIndex=fields.indexOf("name");
+    if(tickerIndex>=0 && cikIndex>=0){
+      for(const row of rows){
+        const ticker=upper(row?.[tickerIndex]);
+        if(ticker===target || ticker.replace(/[-.]/g,"")===normalizedTarget){
+          return {
+            cik:String(row[cikIndex]).padStart(10,"0"),
+            ticker:target,
+            name:row?.[nameIndex] || target
+          };
+        }
+      }
+    }
+  }
+
+  const r=await sec("https://www.sec.gov/files/company_tickers.json");
+  if(r.ok){
+    const j=await r.json();
+    for(const x of Object.values(j||{})){
+      const ticker=upper(x?.ticker);
+      if(ticker===target || ticker.replace(/[-.]/g,"")===normalizedTarget){
+        const cik=x?.cik_str ?? x?.cik;
+        if(cik==null) continue;
+        return {
+          cik:String(cik).padStart(10,"0"),
+          ticker:target,
+          name:x?.title || x?.name || target
+        };
+      }
+    }
+  }
+
   throw Error("السهم غير موجود في خرائط SEC الحالية");
 }
 
