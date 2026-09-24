@@ -383,7 +383,7 @@ async function scanWithFiling(found,sub,filing,facts){
   const rows=tableRows(html);
   const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
   tableScale = localTableScale;
-  const targetDays=filing.form.startsWith("10-K")?365:91;
+  const targetDays=filing.form.startsWith("10-K")||filing.form.startsWith("20-F")||filing.form.startsWith("40-F")?365:(filing.form==="6-K"?180:91);
   const end=filing.reportDate;
   let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
   if(shares==null){
