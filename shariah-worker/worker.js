@@ -120,11 +120,11 @@ function durationFact(facts,tags,accn,end,form,targetDays){
 
 function tableRows(html){
   const rows=[];
-  const tr=/<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi;
+  const tr=/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
   let m;
   while((m=tr.exec(html))){
     const cells=[];
-    const td=/<t[dh]\\b[^>]*>([\\s\\S]*?)<\\/t[dh]>/gi;
+    const td=/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
     let c;
     while((c=td.exec(m[1]))) cells.push(clean(c[1]));
     if(cells.length) rows.push(cells);
@@ -138,9 +138,9 @@ function rowNumber(rows, regexes){
     if(!regexes.some(re=>re.test(row[0]))) continue;
     for(let i=1;i<row.length;i++){
       const raw=row[i]
-        .replace(/\\$/g,"")
+        .replace(/\$/g,"")
         .replace(/,/g,"")
-        .replace(/\\(([^)]+)\\)/,"-$1")
+        .replace(/\(([^)]+)\)/,"-$1")
         .trim();
       const n=num(raw);
       if(n!==null) return n;
@@ -227,8 +227,8 @@ async function scan(input){
   let shares=instantFact(facts,["EntityCommonStockSharesOutstanding"],filing.accn)?.value;
   if(shares==null){
     const text=clean(html);
-    const m=text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\\s+shares of common stock/i)
-      || text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\\s+shares issued and outstanding/i);
+    const m=text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s+shares of common stock/i)
+      || text.match(/([0-9]{1,3}(?:,[0-9]{3})+)\s+shares issued and outstanding/i);
     if(m) shares=num(m[1]);
   }
 
