@@ -132,6 +132,8 @@ function tableRows(html){
   return rows;
 }
 
+let tableScale = 1;
+
 function rowNumber(rows, regexes){
   for(const row of rows){
     if(!row[0]) continue;
@@ -143,7 +145,7 @@ function rowNumber(rows, regexes){
         .replace(/\(([^)]+)\)/,"-$1")
         .trim();
       const n=num(raw);
-      if(n!==null) return n;
+      if(n!==null) return n * (tableScale || 1);
     }
   }
   return null;
@@ -220,6 +222,10 @@ async function scan(input){
     if(fr.ok) html=await fr.text();
   }catch{}
   const rows=tableRows(html);
+  // SEC financial tables for MBOT are reported in thousands of U.S. dollars.
+  // Keep XBRL values as-is; scale only values extracted from HTML tables.
+  const localTableScale = /U\.S\. dollars in thousands/i.test(clean(html)) ? 1000 : 1;
+  tableScale = localTableScale;
 
   const targetDays=filing.form==="10-K"?365:91;
   const end=filing.reportDate;
