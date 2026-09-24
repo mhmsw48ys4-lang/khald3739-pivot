@@ -118,19 +118,20 @@ async function getCik(symbol){
 }
 
 function chooseFiling(recent){
+  let best=null;
   for(let i=0;i<(recent.form||[]).length;i++){
     const form=recent.form[i];
-    if(form==="10-Q" || form==="10-K"){
-      return {
-        form,
-        accn:recent.accessionNumber[i],
-        filingDate:recent.filingDate[i],
-        reportDate:recent.reportDate[i],
-        doc:recent.primaryDocument[i]
-      };
-    }
+    if(form!=="10-Q" && form!=="10-K") continue;
+    const candidate={
+      form,
+      accn:recent.accessionNumber[i],
+      filingDate:recent.filingDate[i],
+      reportDate:recent.reportDate[i],
+      doc:recent.primaryDocument[i]
+    };
+    if(!best || String(candidate.filingDate||"")>String(best.filingDate||"")) best=candidate;
   }
-  return null;
+  return best;
 }
 
 function factsFor(facts, tags){
