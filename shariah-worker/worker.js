@@ -290,7 +290,8 @@ async function scanWithFiling(found,sub,filing,facts){
   const cash=instantFact(facts,["CashAndCashEquivalentsAtCarryingValue"],filing.accn,end)?.value ?? rowNumber(rows,[/^cash and cash equivalents$/i]);
   const moneyMarket=rowNumber(rows,[/money market mutual funds?/i,/money market funds?/i,/^marketable securities$/i]);
   const interestBearingInvestments=rowNumber(rows,[/interest[- ]bearing securities/i,/interest[- ]bearing investments?/i,/treasury bills?/i,/government securities/i,/certificates? of deposit/i,/commercial paper/i,/corporate bonds?/i]);
-  const liquidityInvestments=moneyMarket ?? interestBearingInvestments;
+  const liquidityFact=instantFact(facts,["MarketableSecuritiesCurrent"],filing.accn,end)?.value;
+  const liquidityInvestments=liquidityFact ?? moneyMarket ?? interestBearingInvestments;
   const liquidityAssets=liquidityInvestments;
   const liquidityKnown=liquidityInvestments!=null;
   const price=await marketPrice(found.ticker);
