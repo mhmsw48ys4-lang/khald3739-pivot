@@ -48,6 +48,17 @@ exports.handler = async (event) => {
   const rsi=(a,p=14)=>{if(a.length<=p)return null;let g=0,l=0;for(let i=1;i<=p;i++){const d=a[i]-a[i-1];if(d>=0)g+=d;else l-=d}let ag=g/p,al=l/p;for(let i=p+1;i<a.length;i++){const d=a[i]-a[i-1];ag=(ag*(p-1)+Math.max(d,0))/p;al=(al*(p-1)+Math.max(-d,0))/p}return al===0?100:100-(100/(1+ag/al))};
   const macd=(a)=>{if(a.length<35)return null;let e12=ema(a,12),e26=ema(a,26);return e12!=null&&e26!=null?e12-e26:null};
 
+  async function profileData(symbol){
+    try{
+      const j=await av({function:"OVERVIEW",symbol});
+      return {
+        name:j.Name||null,
+        hq:j.Address ? [j.Address,j.City,j.State,j.Country].filter(Boolean).join(", ") : (j.Country||null),
+        country:j.Country==="China"?"CN":"US"
+      };
+    }catch{return {}}
+  }
+
   async function shortData(symbol){
     if(!massiveKey) return {};
     try{
@@ -81,7 +92,8 @@ exports.handler = async (event) => {
         if(e20!=null&&last.c>e20)score+=8;if(e30!=null&&last.c>e30)score+=7;if(e50!=null&&last.c>e50)score+=7;
         if(rv>=1.5)score+=10;else if(rv>=1.2)score+=5;if(stability>=4)score+=10;else if(stability>=2)score+=5;if(last.v>=500000)score+=5;
         const short=await shortData(symbol);
-        stocks.push({symbol,name:symbol,country:"US",price:last.c,change:r.length>1?((last.c-r[r.length-2].c)/r[r.length-2].c)*100:null,volume:last.v,support,resistance,distance,rsi:rr,rvol:rv,ema20:e20,ema30:e30,ema50:e50,macd:mm,stability,stabilityNeed:4,score:Math.min(100,Math.round(score)),supportOK:true,rebound:last.c>support,macdOK:mm!=null&&mm>=0,macdTrend:mm!=null?(mm>=0?"إيجابي":"سلبي"):"—",emaOK:last.c>e20||last.c>e30||last.c>e50,emaState:(last.c>e20?"فوق":"تحت")+" 20 / "+(last.c>e30?"فوق":"تحت")+" 30 / "+(last.c>e50?"فوق":"تحت")+" 50",room:resistance>last.c*1.15,...short});
+        const profile=q.symbol ? await profileData(symbol) : {};
+        stocks.push({symbol,name:profile.name||symbol,country:profile.country||"US",hq:profile.hq||null,price:last.c,change:r.length>1?((last.c-r[r.length-2].c)/r[r.length-2].c)*100:null,volume:last.v,support,resistance,distance,rsi:rr,rvol:rv,ema20:e20,ema30:e30,ema50:e50,macd:mm,stability,stabilityNeed:4,score:Math.min(100,Math.round(score)),supportOK:true,rebound:last.c>support,macdOK:mm!=null&&mm>=0,macdTrend:mm!=null?(mm>=0?"إيجابي":"سلبي"):"—",emaOK:last.c>e20||last.c>e30||last.c>e50,emaState:(last.c>e20?"فوق":"تحت")+" 20 / "+(last.c>e30?"فوق":"تحت")+" 30 / "+(last.c>e50?"فوق":"تحت")+" 50",room:resistance>last.c*1.15,...short});
       }catch{}
     }
     stocks.sort((a,b)=>b.score-a.score);
