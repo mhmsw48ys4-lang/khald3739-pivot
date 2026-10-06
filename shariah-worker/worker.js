@@ -125,21 +125,33 @@ async function news(env){
    universe.set(symbol,{price,volume,name:x.name??x.Name??""});
  }
 
- // نضيف الرموز التي ظهرت في الأخبار كاحتياط، لكن لا نعتمد عليها لاكتشاف السوق.
+ // رادار الأخبار: الرموز التي ظهرت في أخبار Finnhub الحديثة تُفحص حتى لو لم تكن ضمن أعلى الأسهم نشاطًا.
+ const newsSymbols=new Set();
  try{
    const feed=await getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key));
    if(Array.isArray(feed))for(const n of feed){
      const rel=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
      for(const s0 of rel){
        const s=String(s0||"").trim().toUpperCase();
-       if(/^[A-Z]{1,6}$/.test(s)&&!universe.has(s))universe.set(s,{price:0,volume:0,name:""});
+       if(/^[A-Z]{1,6}$/.test(s))newsSymbols.add(s);
      }
    }
  }catch(_){}
 
  const base=[...universe.entries()].filter(([,x])=>x.price>=1&&x.price<=7);
  base.sort((a,b)=>b[1].volume-a[1].volume);
- const syms=base.slice(0,120).map(([s])=>s);
+ const active=base.slice(0,120).map(([s])=>s);
+ const radar=[...new Set([...active,...[...newsSymbols].slice(0,50)])];
+
+ // מחיר/اسم للرموز التي جاءت من رادار الأخبار ولم تكن في قائمة Nasdaq.
+ await Promise.all([...newsSymbols].slice(0,50).filter(s=>!universe.has(s)).map(async symbol=>{
+   try{
+     const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
+     const p=Number(q.c);
+     if(p>=1&&p<=7)universe.set(symbol,{price:p,volume:0,name:""});
+   }catch(_){}
+ }));
+ const syms=radar.filter(s=>universe.has(s)&&universe.get(s).price>=1&&universe.get(s).price<=7);
  const items=[];
 
  async function one(symbol){
