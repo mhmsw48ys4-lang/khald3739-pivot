@@ -61,9 +61,11 @@ function isCompanyCatalyst(s){
  ];
  const bad=[
   "gap-up","gap up","gap-down","gap down","notable gap","stocks to watch",
-  "market roundup","market update","market recap","pre-market movers",
+  "market roundup","market update","market recap","pre-market movers","premarket movers",
   "top gainers","top losers","technical analysis","price target","stock analysis",
-  "stocks making","market movers","market news","today's session","today’s session"
+  "stocks making","market movers","market news","today's session","today’s session",
+  "stocks moving premarket","stocks moving after hours","here are 20 stocks","20 stocks moving",
+  "stocks moving","premarket stocks","after-hours stocks"
  ];
  return good.some(k=>t.includes(k)) && !bad.some(k=>t.includes(k));
 }
