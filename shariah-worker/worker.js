@@ -46,6 +46,27 @@ $("refresh").onclick=load;load(); setInterval(load,5*60*1000);
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json;charset=UTF-8","cache-control":"no-store"}})}
 function normalizeHeadline(s){return (s||"").toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g," ").trim()}
 function isHot(s){return /fda|approval|approved|contract|agreement|acquisition|acquire|merger|offering|trial|clinical|partnership|deal|guidance|results|award|order|launch|investigation|bankruptcy|default|delisting/i.test(s||"")}
+function isCompanyCatalyst(s){
+ const t=String(s||"").toLowerCase();
+ const good=[
+  "fda","approval","approved","clearance","clinical","trial","phase 1","phase 2","phase 3",
+  "contract","agreement","partnership","collaboration","acquisition","acquire","merger",
+  "license","licensing","order","purchase order","award","launch","milestone",
+  "earnings","revenue","guidance","forecast","results","data","study","patent",
+  "nasdaq","listing","uplisting","compliance","financing","offering","private placement",
+  "registered direct","atm","shelf","sec","10-k","10-q","8-k","shareholder","dividend",
+  "buyback","repurchase","strategic","investment","funding","debt","restructuring",
+  "bankruptcy","default","investigation","lawsuit","settlement","recall","resigns",
+  "appoints","ceo","cfo","cmo","manufacturing","production","revenue"
+ ];
+ const bad=[
+  "gap-up","gap up","gap-down","gap down","notable gap","stocks to watch",
+  "market roundup","market update","market recap","pre-market movers",
+  "top gainers","top losers","technical analysis","price target","stock analysis",
+  "stocks making","market movers","market news","today's session","today’s session"
+ ];
+ return good.some(k=>t.includes(k)) && !bad.some(k=>t.includes(k));
+}
 
 async function getJson(url){const r=await fetch(url,{headers:{"accept":"application/json"}});if(!r.ok)throw new Error("Finnhub HTTP "+r.status);return r.json()}
 
@@ -130,9 +151,15 @@ async function news(env){
  const seen=new Set();
  const out=items.filter(x=>{
    const k=x.symbol+"|"+normalizeHeadline(x.headline);
-   if(seen.has(k))return false;seen.add(k);return true;
+   if(seen.has(k))return false;
+   seen.add(k);
+   return isCompanyCatalyst(x.headline+" "+x.summary);
  });
- out.sort((a,b)=>b.datetime-a.datetime || b.volume-a.volume);
+ out.sort((a,b)=>{
+   const ah=isHot(a.headline+" "+a.summary)?1:0;
+   const bh=isHot(b.headline+" "+b.summary)?1:0;
+   return (bh-ah)||(b.datetime-a.datetime)||(b.volume-a.volume);
+ });
 
  return json({
   stats:{
