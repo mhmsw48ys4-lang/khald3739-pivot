@@ -49,34 +49,99 @@ function isHot(s){return /fda|approval|approved|contract|agreement|acquisition|a
 
 async function getJson(url){const r=await fetch(url,{headers:{"accept":"application/json"}});if(!r.ok)throw new Error("Finnhub HTTP "+r.status);return r.json()}
 
+async function getNasdaqRows(exchange){
+ const u="https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=500&offset=0&exchange="+exchange+"&download=true";
+ const r=await fetch(u,{headers:{
+  "accept":"application/json,text/plain,*/*",
+  "accept-language":"en-US,en;q=0.9",
+  "origin":"https://www.nasdaq.com",
+  "referer":"https://www.nasdaq.com/market-activity/stocks/screener",
+  "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0 Safari/537.36"
+ }});
+ if(!r.ok)throw new Error("NASDAQ HTTP "+r.status);
+ const d=await r.json();
+ return Array.isArray(d?.data?.rows)?d.data.rows:[];
+}
+
+function num(v){
+ const s=String(v??"").replace(/[$,% ,]/g,"").trim();
+ const n=Number(s);return Number.isFinite(n)?n:0;
+}
+
 async function news(env){
  if(!env.FINNHUB_API_KEY)return json({error:"FINNHUB_API_KEY غير موجود في Cloudflare Worker Secrets"},500);
- const key=env.FINNHUB_API_KEY;
- const now=Math.floor(Date.now()/1000);
+ const key=env.FINNHUB_API_KEY, now=Math.floor(Date.now()/1000);
  const today=new Date().toISOString().slice(0,10);
  const from=new Date(Date.now()-24*3600*1000).toISOString().slice(0,10);
- const f=await Promise.allSettled([
-  getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key)),
-  getJson(FINNHUB_BASE+"/news?category=merger&token="+encodeURIComponent(key))
- ]);
- const m=new Map();
- for(const z of f)if(z.status==="fulfilled"&&Array.isArray(z.value))for(const n of z.value){
-  const rs=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
-  for(const s0 of rs){const s=String(s0||"").trim().toUpperCase();if(/^[A-Z]{1,6}$/.test(s))m.set(s,1)}
+
+ // نبدأ من قائمة الأسهم نفسها، وليس من الأخبار. نستخدم Nasdaq كمصدر universe
+ // ثم نرتب أسهم $1-$7 حسب النشاط ونفحص Company News في Finnhub.
+ const rs=await Promise.allSettled(["NASDAQ","NYSE","AMEX"].map(getNasdaqRows));
+ const universe=new Map();
+ for(const r of rs)if(r.status==="fulfilled")for(const x of r.value){
+   const symbol=String(x.symbol||x.Symbol||"").trim().toUpperCase();
+   const price=num(x.lastsale??x["Last Sale"]??x.lastSale);
+   const volume=num(x.volume??x.Volume);
+   if(!/^[A-Z]{1,6}$/.test(symbol)||!(price>=1&&price<=7))continue;
+   universe.set(symbol,{price,volume,name:x.name??x.Name??""});
  }
- const syms=[...m.keys()].slice(0,60),items=[],batch=8;
+
+ // نضيف الرموز التي ظهرت في الأخبار كاحتياط، لكن لا نعتمد عليها لاكتشاف السوق.
+ try{
+   const feed=await getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key));
+   if(Array.isArray(feed))for(const n of feed){
+     const rel=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
+     for(const s0 of rel){
+       const s=String(s0||"").trim().toUpperCase();
+       if(/^[A-Z]{1,6}$/.test(s)&&!universe.has(s))universe.set(s,{price:0,volume:0,name:""});
+     }
+   }
+ }catch(_){}
+
+ const base=[...universe.entries()].filter(([,x])=>x.price>=1&&x.price<=7);
+ base.sort((a,b)=>b[1].volume-a[1].volume);
+ const syms=base.slice(0,120).map(([s])=>s);
+ const items=[];
+
  async function one(symbol){
   try{
    const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
-   const p=Number(q.c);if(!(p>=1&&p<=7))return;
+   const price=Number(q.c);
+   if(!(price>=1&&price<=7))return;
    const ns=await getJson(FINNHUB_BASE+"/company-news?symbol="+encodeURIComponent(symbol)+"&from="+from+"&to="+today+"&token="+encodeURIComponent(key));
-   for(const n of (Array.isArray(ns)?ns:[])){const ts=Number(n.datetime||0);if(!ts||now-ts>86400||!n.headline)continue;items.push({symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",datetime:ts,price:p,change:Number(q.dp||0),hot:isHot(n.headline+" "+(n.summary||""))})}
+   for(const n of (Array.isArray(ns)?ns:[])){
+     const ts=Number(n.datetime||0);
+     if(!ts||now-ts>86400||!n.headline)continue;
+     const text=n.headline+" "+(n.summary||"");
+     items.push({
+       symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",
+       datetime:ts,price,change:Number(q.dp||0),
+       volume:universe.get(symbol)?.volume||0,
+       hot:isHot(text),
+       freshness:now-ts<=900?"جديد جدًا":now-ts<=3600?"آخر ساعة":"اليوم"
+     });
+   }
   }catch(_){}
  }
- for(let i=0;i<syms.length;i+=batch)await Promise.all(syms.slice(i,i+batch).map(one));
- const seen=new Set(),out=items.filter(x=>{const k=x.symbol+"|"+normalizeHeadline(x.headline);if(seen.has(k))return false;seen.add(k);return true});
- out.sort((a,b)=>b.datetime-a.datetime);
- return json({stats:{matching:out.length,lastHour:out.filter(x=>now-x.datetime<=3600).length,hot:out.filter(x=>x.hot).length},items:out.slice(0,50),note:"Company News + أخبار آخر 24 ساعة. لا يمكن ضمان حصرية الخبر من المصدر."});
+
+ // دفعات صغيرة حتى لا نتجاوز حدود Finnhub.
+ for(let i=0;i<syms.length;i+=6)await Promise.all(syms.slice(i,i+6).map(one));
+
+ const seen=new Set();
+ const out=items.filter(x=>{
+   const k=x.symbol+"|"+normalizeHeadline(x.headline);
+   if(seen.has(k))return false;seen.add(k);return true;
+ });
+ out.sort((a,b)=>b.datetime-a.datetime || b.volume-a.volume);
+
+ return json({
+  stats:{
+   matching:out.length,lastHour:out.filter(x=>now-x.datetime<=3600).length,
+   hot:out.filter(x=>x.hot).length,universe:base.length,scanned:syms.length
+  },
+  items:out.slice(0,50),
+  note:"المصدر يبدأ من قائمة أسهم Nasdaq/NYSE/AMEX بسعر $1-$7 ثم يفحص Company News. الفحص يركز على الأسهم الأعلى نشاطًا ضمن النطاق لتفادي حدود API؛ «حصري» غير مضمون."
+ });
 }
 
 export default {
