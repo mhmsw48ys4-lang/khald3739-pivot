@@ -52,28 +52,31 @@ async function getJson(url){const r=await fetch(url,{headers:{"accept":"applicat
 async function news(env){
  if(!env.FINNHUB_API_KEY)return json({error:"FINNHUB_API_KEY غير موجود في Cloudflare Worker Secrets"},500);
  const key=env.FINNHUB_API_KEY;
- const feed=await getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key));
- const raw=Array.isArray(feed)?feed:[];
- const candidates=new Map();
- for(const n of raw){
-   const rel=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
-   for(const sym0 of rel){const sym=String(sym0||"").trim().toUpperCase();if(/^[A-Z]{1,6}$/.test(sym))candidates.set(sym,n)}
- }
- const syms=[...candidates.keys()].slice(0,80);
- const items=[];
- await Promise.all(syms.map(async symbol=>{
-   try{
-    const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
-    const price=Number(q.c);
-    if(!(price>=1&&price<=7))return;
-    const n=candidates.get(symbol); if(!n||!n.headline||!n.datetime)return;
-    items.push({symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",datetime:Number(n.datetime),price,change:Number(q.dp||0),hot:isHot(n.headline+" "+(n.summary||""))});
-   }catch(_){}
- }));
- const seen=new Set();const dedup=items.filter(x=>{const k=x.symbol+"|"+normalizeHeadline(x.headline);if(seen.has(k))return false;seen.add(k);return true});
- dedup.sort((a,b)=>b.datetime-a.datetime);
  const now=Math.floor(Date.now()/1000);
- return json({stats:{matching:dedup.length,lastHour:dedup.filter(x=>now-x.datetime<=3600).length,hot:dedup.filter(x=>x.hot).length},items:dedup.slice(0,30),note:"المصدر الحالي يبدأ من تغذية أخبار Finnhub العامة؛ لذلك لا يمكن ضمان التقاط كل سهم $1-$7 في السوق من هذا المصدر وحده."});
+ const today=new Date().toISOString().slice(0,10);
+ const from=new Date(Date.now()-24*3600*1000).toISOString().slice(0,10);
+ const f=await Promise.allSettled([
+  getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key)),
+  getJson(FINNHUB_BASE+"/news?category=merger&token="+encodeURIComponent(key))
+ ]);
+ const m=new Map();
+ for(const z of f)if(z.status==="fulfilled"&&Array.isArray(z.value))for(const n of z.value){
+  const rs=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
+  for(const s0 of rs){const s=String(s0||"").trim().toUpperCase();if(/^[A-Z]{1,6}$/.test(s))m.set(s,1)}
+ }
+ const syms=[...m.keys()].slice(0,60),items=[],batch=8;
+ async function one(symbol){
+  try{
+   const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
+   const p=Number(q.c);if(!(p>=1&&p<=7))return;
+   const ns=await getJson(FINNHUB_BASE+"/company-news?symbol="+encodeURIComponent(symbol)+"&from="+from+"&to="+today+"&token="+encodeURIComponent(key));
+   for(const n of (Array.isArray(ns)?ns:[])){const ts=Number(n.datetime||0);if(!ts||now-ts>86400||!n.headline)continue;items.push({symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",datetime:ts,price:p,change:Number(q.dp||0),hot:isHot(n.headline+" "+(n.summary||""))})}
+  }catch(_){}
+ }
+ for(let i=0;i<syms.length;i+=batch)await Promise.all(syms.slice(i,i+batch).map(one));
+ const seen=new Set(),out=items.filter(x=>{const k=x.symbol+"|"+normalizeHeadline(x.headline);if(seen.has(k))return false;seen.add(k);return true});
+ out.sort((a,b)=>b.datetime-a.datetime);
+ return json({stats:{matching:out.length,lastHour:out.filter(x=>now-x.datetime<=3600).length,hot:out.filter(x=>x.hot).length},items:out.slice(0,50),note:"Company News + أخبار آخر 24 ساعة. لا يمكن ضمان حصرية الخبر من المصدر."});
 }
 
 export default {
