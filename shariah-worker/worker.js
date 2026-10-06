@@ -156,7 +156,7 @@ function parseRss(xml,source,universe){
   const symbols=extractSymbols(text,universe);
   const ts=Date.parse(pub);
   if(!headline||!Number.isFinite(ts))continue;
-  out.push({headline,summary,url,issuer,symbols,datetime:Math.floor(ts/1000),source});
+  out.push({headline,summary,url,issuer,symbols,raw:b,datetime:Math.floor(ts/1000),source});
  }
  return out;
 }
@@ -208,7 +208,7 @@ async function news(env,notify=false){
    fetchFeed(PR_RSS,"PR Newswire")
  ]);
  const raw=feeds.flat().map(x=>{
-   const symbols=extractSymbols(x.headline+" "+x.summary+" "+x.issuer+" "+x.url,universe);
+   const symbols=extractSymbols(x.headline+" "+x.summary+" "+x.issuer+" "+x.url+" "+x.raw,universe);
    return {...x,symbols};
  }).filter(x=>x.symbols.length&&now-x.datetime<=86400);
  const items=[];
