@@ -254,5 +254,8 @@ export default {
    if(url.pathname==="/favicon.ico")return new Response("",{status:204});
    if(url.pathname==="/api/test-telegram"){await telegram("✅ تم ربط تنبيهات الأخبار بنجاح.",env);return json({ok:true})}
    return new Response(HTML,{headers:{"content-type":"text/html;charset=UTF-8","cache-control":"no-store"}});
+ },
+ async scheduled(event,env,ctx){
+   ctx.waitUntil(news(env,true).catch(()=>{}));
  }
 };
