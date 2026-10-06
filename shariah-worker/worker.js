@@ -44,11 +44,6 @@ $("refresh").onclick=load;load(); setInterval(load,5*60*1000);
 </script></body></html>`;
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json;charset=UTF-8","cache-control":"no-store"}})}
-async function telegram(text,env){
- if(!env.TELEGRAM_BOT_TOKEN||!env.TELEGRAM_CHAT_ID)return;
- const u="https://api.telegram.org/bot"+env.TELEGRAM_BOT_TOKEN+"/sendMessage";
- try{await fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({chat_id:env.TELEGRAM_CHAT_ID,text,disable_web_page_preview:true})})}catch(_){}
-}
 function normalizeHeadline(s){return (s||"").toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g," ").trim()}
 function isHot(s){return /fda|approval|approved|contract|agreement|acquisition|acquire|merger|offering|trial|clinical|partnership|deal|guidance|results|award|order|launch|investigation|bankruptcy|default|delisting/i.test(s||"")}
 function isCompanyCatalyst(s){
@@ -192,7 +187,7 @@ function isCatalyst(s){
   "resigns","appoints","ceo","cfo","cmo","manufacturing","production"
  ].some(k=>t.includes(k));
 }
-async function news(env,notify=false){
+async function news(env){
  const now=Math.floor(Date.now()/1000);
  const rs=await Promise.allSettled(["NASDAQ","NYSE","AMEX"].map(getNasdaqRows));
  const universe=new Map();
@@ -256,6 +251,6 @@ export default {
    return new Response(HTML,{headers:{"content-type":"text/html;charset=UTF-8","cache-control":"no-store"}});
  },
  async scheduled(event,env,ctx){
-   ctx.waitUntil(news(env,true).catch(()=>{}));
+   ctx.waitUntil(news(env).catch(()=>{}));
  }
 };
