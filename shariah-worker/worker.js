@@ -184,7 +184,7 @@ async function news(env){
    if(seen.has(k))return false;
    seen.add(k);
    const text=x.headline+" "+x.summary;
-   return isCompanyCatalyst(text) && companyMentioned(x.symbol,x.name,text);
+   return isCompanyCatalyst(text);
  });
  out.sort((a,b)=>{
    const ah=isHot(a.headline+" "+a.summary)?1:0;
