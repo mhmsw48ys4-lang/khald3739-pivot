@@ -44,6 +44,11 @@ $("refresh").onclick=load;load(); setInterval(load,5*60*1000);
 </script></body></html>`;
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json;charset=UTF-8","cache-control":"no-store"}})}
+async function telegram(text,env){
+ if(!env.TELEGRAM_BOT_TOKEN||!env.TELEGRAM_CHAT_ID)return;
+ const u="https://api.telegram.org/bot"+env.TELEGRAM_BOT_TOKEN+"/sendMessage";
+ try{await fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({chat_id:env.TELEGRAM_CHAT_ID,text,disable_web_page_preview:true})})}catch(_){}
+}
 function normalizeHeadline(s){return (s||"").toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g," ").trim()}
 function isHot(s){return /fda|approval|approved|contract|agreement|acquisition|acquire|merger|offering|trial|clinical|partnership|deal|guidance|results|award|order|launch|investigation|bankruptcy|default|delisting/i.test(s||"")}
 function isCompanyCatalyst(s){
@@ -109,7 +114,7 @@ function num(v){
  const n=Number(s);return Number.isFinite(n)?n:0;
 }
 
-async function news(env){
+async function news(env,notify=false){
  if(!env.FINNHUB_API_KEY)return json({error:"FINNHUB_API_KEY غير موجود في Cloudflare Worker Secrets"},500);
  const key=env.FINNHUB_API_KEY, now=Math.floor(Date.now()/1000);
  const today=new Date().toISOString().slice(0,10);
@@ -188,7 +193,7 @@ async function news(env){
    const text=x.headline+" "+x.summary;
    return isCompanyCatalyst(text);
  });
- out.sort((a,b)=>{
+ if(notify && out.length){\n   const fresh=out.filter(x=>now-x.datetime<=600).slice(0,5);\n   for(const x of fresh){\n     const tone=/fda|approval|contract|agreement|acquisition|merger|partnership|deal|award|order|launch|results/i.test(x.headline+" "+x.summary)?"🟢 إيجابي":"🟡 خبر";\n     await telegram("📰 خبر جديد — $"+x.symbol+"\\n"+tone+"\\n"+x.headline+"\\n💰 السعر: $"+Number(x.price).toFixed(2)+"\\n⏱️ "+Math.max(0,Math.floor((now-x.datetime)/60))+" دقيقة\\n"+x.url,env);\n   }\n }\n out.sort((a,b)=>{
    const ah=isHot(a.headline+" "+a.summary)?1:0;
    const bh=isHot(b.headline+" "+b.summary)?1:0;
    return (bh-ah)||(b.datetime-a.datetime)||(b.volume-a.volume);
@@ -209,6 +214,7 @@ export default {
    const url=new URL(request.url);
    if(url.pathname==="/api/news")return news(env).catch(e=>json({error:e.message},500));
    if(url.pathname==="/favicon.ico")return new Response("",{status:204});
+   if(url.pathname==="/api/test-telegram"){await telegram("✅ تم ربط تنبيهات الأخبار بنجاح.",env);return json({ok:true})}
    return new Response(HTML,{headers:{"content-type":"text/html;charset=UTF-8","cache-control":"no-store"}});
  }
 };
