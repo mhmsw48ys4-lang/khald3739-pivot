@@ -48,6 +48,8 @@ function normalizeHeadline(s){return (s||"").toLowerCase().replace(/[^a-z0-9\u06
 function isHot(s){return /fda|approval|approved|contract|agreement|acquisition|acquire|merger|offering|trial|clinical|partnership|deal|guidance|results|award|order|launch|investigation|bankruptcy|default|delisting/i.test(s||"")}
 function isCompanyCatalyst(s){
  const t=String(s||"").toLowerCase();
+ const genericMover=["trending:","here's why","heres why","why shares are trading","why the stock is","why shares are","rocketed","dow jumps","nasdaq","s&p 500","trade deficit","u.s. stocks","us stocks","market roundup","market update","market recap","market news","market movers","pre-market movers","premarket movers","after-hours movers","stocks moving"];
+ if(genericMover.some(k=>t.includes(k)))return false;
  const good=[
   "fda","approval","approved","clearance","clinical","trial","phase 1","phase 2","phase 3",
   "contract","agreement","partnership","collaboration","acquisition","acquire","merger",
