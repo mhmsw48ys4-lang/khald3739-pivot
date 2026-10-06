@@ -40,7 +40,7 @@ if(!d.items?.length){$("list").innerHTML='<div class="empty">لا توجد أخ�
 else{$("list").innerHTML=d.items.map(x=>{const t=tone(x.headline+" "+x.summary);return '<article class="card"><div class="top"><div><span class="ticker">$'+esc(x.symbol)+'</span><span class="pill">'+esc(x.source||"مصدر")+'</span><span class="pill">'+esc(age(x.datetime*1000))+'</span></div><div><span class="pill '+t[1]+'">'+t[0]+'</span>'+(x.hot?'<span class="pill hot">🔥 ساخن</span>':"")+'</div></div><div class="title">'+esc(x.headline)+'</div><div class="meta">السعر: $'+Number(x.price||0).toFixed(2)+' · التغير: '+Number(x.change||0).toFixed(2)+'%</div><div class="summary">'+esc(x.summary||"")+'</div><a class="link" href="'+esc(x.url||"#")+'" target="_blank" rel="noopener">فتح المصدر ↗</a></article>'}).join("")}
 $("status").textContent="آخر تحديث: "+new Date().toLocaleTimeString("ar-SA")}catch(e){$("status").textContent="خطأ: "+e.message}
 $("refresh").disabled=false}
-$("refresh").onclick=load;load();
+$("refresh").onclick=load;load(); setInterval(load,5*60*1000);
 </script></body></html>`;
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json;charset=UTF-8","cache-control":"no-store"}})}
@@ -59,7 +59,7 @@ async function news(env){
    const rel=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
    for(const sym0 of rel){const sym=String(sym0||"").trim().toUpperCase();if(/^[A-Z]{1,6}$/.test(sym))candidates.set(sym,n)}
  }
- const syms=[...candidates.keys()].slice(0,35);
+ const syms=[...candidates.keys()].slice(0,80);
  const items=[];
  await Promise.all(syms.map(async symbol=>{
    try{
@@ -73,7 +73,7 @@ async function news(env){
  const seen=new Set();const dedup=items.filter(x=>{const k=x.symbol+"|"+normalizeHeadline(x.headline);if(seen.has(k))return false;seen.add(k);return true});
  dedup.sort((a,b)=>b.datetime-a.datetime);
  const now=Math.floor(Date.now()/1000);
- return json({stats:{matching:dedup.length,lastHour:dedup.filter(x=>now-x.datetime<=3600).length,hot:dedup.filter(x=>x.hot).length},items:dedup.slice(0,30)});
+ return json({stats:{matching:dedup.length,lastHour:dedup.filter(x=>now-x.datetime<=3600).length,hot:dedup.filter(x=>x.hot).length},items:dedup.slice(0,30),note:"المصدر الحالي يبدأ من تغذية أخبار Finnhub العامة؛ لذلك لا يمكن ضمان التقاط كل سهم $1-$7 في السوق من هذا المصدر وحده."});
 }
 
 export default {
