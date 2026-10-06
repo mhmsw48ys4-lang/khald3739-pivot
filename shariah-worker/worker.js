@@ -67,6 +67,22 @@ function isCompanyCatalyst(s){
  ];
  return good.some(k=>t.includes(k)) && !bad.some(k=>t.includes(k));
 }
+function companyMentioned(symbol,name,text){
+ const t=String(text||"").toLowerCase();
+ const sym=String(symbol||"").toLowerCase();
+ if(sym && new RegExp("(^|\\W)"+sym.replace(/[.*+?^$()|[\\]\\\\]/g,"\\\\$&")+"(\\W|$)","i").test(t)) return true;
+ const n=String(name||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+ if(!n)return false;
+ if(t.includes(n))return true;
+ const words=n.split(/\\s+/).filter(w=>w.length>=4);
+ if(words.length>=2){
+   const hits=words.filter(w=>t.includes(w)).length;
+   return hits>=2;
+ }
+ return words.length===1 && words[0].length>=7 && t.includes(words[0]);
+}
+
+
 
 async function getJson(url){const r=await fetch(url,{headers:{"accept":"application/json"}});if(!r.ok)throw new Error("Finnhub HTTP "+r.status);return r.json()}
 
@@ -137,7 +153,7 @@ async function news(env){
      items.push({
        symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",
        datetime:ts,price,change:Number(q.dp||0),
-       volume:universe.get(symbol)?.volume||0,
+       volume:universe.get(symbol)?.volume||0,name:universe.get(symbol)?.name||"",
        hot:isHot(text),
        freshness:now-ts<=900?"جديد جدًا":now-ts<=3600?"آخر ساعة":"اليوم"
      });
@@ -153,7 +169,8 @@ async function news(env){
    const k=x.symbol+"|"+normalizeHeadline(x.headline);
    if(seen.has(k))return false;
    seen.add(k);
-   return isCompanyCatalyst(x.headline+" "+x.summary);
+   const text=x.headline+" "+x.summary;
+   return isCompanyCatalyst(text) && companyMentioned(x.symbol,x.name,text);
  });
  out.sort((a,b)=>{
    const ah=isHot(a.headline+" "+a.summary)?1:0;
@@ -167,7 +184,7 @@ async function news(env){
    hot:out.filter(x=>x.hot).length,universe:base.length,scanned:syms.length
   },
   items:out.slice(0,50),
-  note:"المصدر يبدأ من قائمة أسهم Nasdaq/NYSE/AMEX بسعر $1-$7 ثم يفحص Company News. الفحص يركز على الأسهم الأعلى نشاطًا ضمن النطاق لتفادي حدود API؛ «حصري» غير مضمون."
+  note:"المصدر يبدأ من قائمة أسهم Nasdaq/NYSE/AMEX بسعر $1-$7 ثم يفحص Company News، ولا يعرض الخبر إلا إذا كان مرتبطًا مباشرة بالشركة؛ مقالات القوائم والأخبار العامة تُستبعد. «حصري» غير مضمون."
  });
 }
 
