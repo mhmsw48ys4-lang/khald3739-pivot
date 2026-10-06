@@ -193,7 +193,13 @@ async function news(env,notify=false){
    const text=x.headline+" "+x.summary;
    return isCompanyCatalyst(text);
  });
- if(notify && out.length){\n   const fresh=out.filter(x=>now-x.datetime<=600).slice(0,5);\n   for(const x of fresh){\n     const tone=/fda|approval|contract|agreement|acquisition|merger|partnership|deal|award|order|launch|results/i.test(x.headline+" "+x.summary)?"🟢 إيجابي":"🟡 خبر";\n     await telegram("📰 خبر جديد — $"+x.symbol+"\\n"+tone+"\\n"+x.headline+"\\n💰 السعر: $"+Number(x.price).toFixed(2)+"\\n⏱️ "+Math.max(0,Math.floor((now-x.datetime)/60))+" دقيقة\\n"+x.url,env);\n   }\n }\n out.sort((a,b)=>{
+ if(notify && out.length){
+   const fresh=out.filter(x=>now-x.datetime<=600).slice(0,5);
+   for(const x of fresh){
+     const tone=/fda|approval|contract|agreement|acquisition|merger|partnership|deal|award|order|launch|results/i.test(x.headline+" "+x.summary)?"🟢 إيجابي":"🟡 خبر";
+     await telegram("📰 خبر جديد — $"+x.symbol+"\n"+tone+"\n"+x.headline+"\n💰 السعر: $"+Number(x.price).toFixed(2)+"\n⏱️ "+Math.max(0,Math.floor((now-x.datetime)/60))+" دقيقة\n"+x.url,env);
+   }
+ }\n out.sort((a,b)=>{
    const ah=isHot(a.headline+" "+a.summary)?1:0;
    const bh=isHot(b.headline+" "+b.summary)?1:0;
    return (bh-ah)||(b.datetime-a.datetime)||(b.volume-a.volume);
