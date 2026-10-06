@@ -114,14 +114,86 @@ function num(v){
  const n=Number(s);return Number.isFinite(n)?n:0;
 }
 
-async function news(env,notify=false){
- if(!env.FINNHUB_API_KEY)return json({error:"FINNHUB_API_KEY غير موجود في Cloudflare Worker Secrets"},500);
- const key=env.FINNHUB_API_KEY, now=Math.floor(Date.now()/1000);
- const today=new Date().toISOString().slice(0,10);
- const from=new Date(Date.now()-24*3600*1000).toISOString().slice(0,10);
+const GLOBE_RSS="https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies";
+const PR_RSS="https://www.prnewswire.com/rss/news-releases-list.rss";
 
- // نبدأ من قائمة الأسهم نفسها، وليس من الأخبار. نستخدم Nasdaq كمصدر universe
- // ثم نرتب أسهم $1-$7 حسب النشاط ونفحص Company News في Finnhub.
+function xmlUnescape(s){
+ return String(s||"").replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,"$1")
+  .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+  .replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'");
+}
+function stripHtml(s){return xmlUnescape(s).replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim()}
+function xmlField(block,name){
+ const re=new RegExp("<(?:[\\w-]+:)?" + name + "(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w-]+:)?" + name + ">","i");
+ const m=block.match(re); return m?xmlUnescape(m[1]).trim():"";
+}
+function xmlLink(block){
+ const a=block.match(/<link[^>]+href=["']([^"']+)["'][^>]*>/i);
+ if(a)return xmlUnescape(a[1]);
+ return xmlField(block,"link").replace(/<!\[CDATA\[|\]\]>/g,"").trim();
+}
+function extractSymbols(text,universe){
+ const out=new Set(), t=stripHtml(text);
+ let m;
+ const re1=/\b(?:NASDAQ|NYSE|NYSEAMERICAN|AMEX|OTCQX|OTCQB|OTC):\s*([A-Z]{1,6})\b/gi;
+ while((m=re1.exec(t)))out.add(m[1].toUpperCase());
+ const re2=/\$([A-Z]{1,6})\b/g;
+ while((m=re2.exec(t)))out.add(m[1].toUpperCase());
+ const re3=/\(([A-Z]{1,6})\)/g;
+ while((m=re3.exec(t)))if(universe.has(m[1]))out.add(m[1]);
+ return [...out].filter(s=>universe.has(s));
+}
+function parseRss(xml,source,universe){
+ const blocks=[...xml.matchAll(/<(?:item|entry)\b[^>]*>([\s\S]*?)<\/(?:item|entry)>/gi)].map(x=>x[1]);
+ const out=[];
+ for(const b of blocks){
+  const headline=stripHtml(xmlField(b,"title"));
+  const summary=stripHtml(xmlField(b,"description")||xmlField(b,"summary")||xmlField(b,"content"));
+  const url=xmlLink(b)||xmlField(b,"guid");
+  const pub=xmlField(b,"pubDate")||xmlField(b,"published")||xmlField(b,"updated");
+  const issuer=stripHtml(xmlField(b,"contributor")||xmlField(b,"creator")||xmlField(b,"author"));
+  const text=headline+" "+summary+" "+issuer+" "+b;
+  const symbols=extractSymbols(text,universe);
+  const ts=Date.parse(pub);
+  if(!headline||!Number.isFinite(ts))continue;
+  out.push({headline,summary,url,issuer,symbols,datetime:Math.floor(ts/1000),source});
+ }
+ return out;
+}
+async function fetchFeed(url,source){
+ try{
+  const r=await fetch(url,{headers:{"user-agent":"KhalidStockNews/1.0","accept":"application/rss+xml,application/atom+xml,text/xml,*/*"}});
+  if(!r.ok)return[];
+  return parseRss(await r.text(),source,new Map());
+ }catch(_){return[]}
+}
+function isBadWireStory(s){
+ const t=String(s||"").toLowerCase();
+ return [
+  "stocks to watch","stocks moving","top gainers","top losers","market roundup",
+  "market update","market recap","market movers","premarket movers","pre-market movers",
+  "after-hours movers","here are 20 stocks","20 stocks moving","price target",
+  "stock analysis","technical analysis","equity alert","investigation deadline",
+  "class action","law firm","attorneys","investor alert","shares tank","why shares",
+  "trending:"
+ ].some(k=>t.includes(k));
+}
+function isCatalyst(s){
+ const t=String(s||"").toLowerCase();
+ return [
+  "fda","approval","approved","clearance","clinical","phase 1","phase 2","phase 3",
+  "trial","contract","agreement","partnership","collaboration","acquisition","acquire",
+  "merger","license","licensing","order","purchase order","award","launch","milestone",
+  "earnings","revenue","guidance","forecast","results","data","study","patent",
+  "uplisting","nasdaq","compliance","financing","offering","private placement",
+  "registered direct","atm","sec","10-k","10-q","8-k","shareholder","dividend",
+  "buyback","repurchase","strategic","investment","funding","debt","restructuring",
+  "bankruptcy","default","delisting","investigation","lawsuit","settlement","recall",
+  "resigns","appoints","ceo","cfo","cmo","manufacturing","production"
+ ].some(k=>t.includes(k));
+}
+async function news(env,notify=false){
+ const now=Math.floor(Date.now()/1000);
  const rs=await Promise.allSettled(["NASDAQ","NYSE","AMEX"].map(getNasdaqRows));
  const universe=new Map();
  for(const r of rs)if(r.status==="fulfilled")for(const x of r.value){
@@ -131,87 +203,47 @@ async function news(env,notify=false){
    if(!/^[A-Z]{1,6}$/.test(symbol)||!(price>=1&&price<=7))continue;
    universe.set(symbol,{price,volume,name:x.name??x.Name??""});
  }
-
- // رادار الأخبار: الرموز التي ظهرت في أخبار Finnhub الحديثة تُفحص حتى لو لم تكن ضمن أعلى الأسهم نشاطًا.
- const newsSymbols=new Set();
- try{
-   const feed=await getJson(FINNHUB_BASE+"/news?category=general&token="+encodeURIComponent(key));
-   if(Array.isArray(feed))for(const n of feed){
-     const rel=Array.isArray(n.related)?n.related:(typeof n.related==="string"?n.related.split(","):[]);
-     for(const s0 of rel){
-       const s=String(s0||"").trim().toUpperCase();
-       if(/^[A-Z]{1,6}$/.test(s))newsSymbols.add(s);
-     }
-   }
- }catch(_){}
-
- const base=[...universe.entries()].filter(([,x])=>x.price>=1&&x.price<=7);
- base.sort((a,b)=>b[1].volume-a[1].volume);
- const active=base.slice(0,120).map(([s])=>s);
- const radar=[...new Set([...active,...[...newsSymbols].slice(0,50)])];
-
- // מחיר/اسم للرموز التي جاءت من رادار الأخبار ولم تكن في قائمة Nasdaq.
- await Promise.all([...newsSymbols].slice(0,50).filter(s=>!universe.has(s)).map(async symbol=>{
-   try{
-     const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
-     const p=Number(q.c);
-     if(p>=1&&p<=7)universe.set(symbol,{price:p,volume:0,name:""});
-   }catch(_){}
- }));
- const syms=radar.filter(s=>universe.has(s)&&universe.get(s).price>=1&&universe.get(s).price<=7);
+ const feeds=await Promise.all([
+   fetchFeed(GLOBE_RSS,"GlobeNewswire"),
+   fetchFeed(PR_RSS,"PR Newswire")
+ ]);
+ const raw=feeds.flat().map(x=>{
+   const symbols=extractSymbols(x.headline+" "+x.summary+" "+x.issuer+" "+x.url,universe);
+   return {...x,symbols};
+ }).filter(x=>x.symbols.length&&now-x.datetime<=86400);
  const items=[];
-
- async function one(symbol){
-  try{
-   const q=await getJson(FINNHUB_BASE+"/quote?symbol="+encodeURIComponent(symbol)+"&token="+encodeURIComponent(key));
-   const price=Number(q.c);
-   if(!(price>=1&&price<=7))return;
-   const ns=await getJson(FINNHUB_BASE+"/company-news?symbol="+encodeURIComponent(symbol)+"&from="+from+"&to="+today+"&token="+encodeURIComponent(key));
-   for(const n of (Array.isArray(ns)?ns:[])){
-     const ts=Number(n.datetime||0);
-     if(!ts||now-ts>86400||!n.headline)continue;
-     const text=n.headline+" "+(n.summary||"");
+ for(const x of raw){
+   if(isBadWireStory(x.headline+" "+x.summary))continue;
+   const text=x.headline+" "+x.summary+" "+x.issuer;
+   if(!isCatalyst(text))continue;
+   for(const symbol of x.symbols){
+     const q=universe.get(symbol);
+     if(!q)continue;
      items.push({
-       symbol,headline:n.headline,summary:n.summary||"",source:n.source||"",url:n.url||"",
-       datetime:ts,price,change:Number(q.dp||0),
-       volume:universe.get(symbol)?.volume||0,name:universe.get(symbol)?.name||"",
-       hot:isHot(text),
-       freshness:now-ts<=900?"جديد جدًا":now-ts<=3600?"آخر ساعة":"اليوم"
+       symbol,headline:x.headline,summary:x.summary,url:x.url,source:x.source,
+       datetime:x.datetime,price:q.price,change:0,volume:q.volume,
+       name:q.name,hot:isHot(text),freshness:now-x.datetime<=900?"جديد جدًا":now-x.datetime<=3600?"آخر ساعة":"اليوم"
      });
    }
-  }catch(_){}
  }
-
- // دفعات صغيرة حتى لا نتجاوز حدود Finnhub.
- for(let i=0;i<syms.length;i+=6)await Promise.all(syms.slice(i,i+6).map(one));
-
  const seen=new Set();
  const out=items.filter(x=>{
    const k=x.symbol+"|"+normalizeHeadline(x.headline);
    if(seen.has(k))return false;
-   seen.add(k);
-   const text=x.headline+" "+x.summary;
-   return isCompanyCatalyst(text);
+   seen.add(k);return true;
  });
- if(notify && out.length){
+ out.sort((a,b)=>(Number(b.hot)-Number(a.hot))||(b.datetime-a.datetime)||(b.volume-a.volume));
+ if(notify&&out.length){
    const fresh=out.filter(x=>now-x.datetime<=600).slice(0,5);
    for(const x of fresh){
-     const tone=/fda|approval|contract|agreement|acquisition|merger|partnership|deal|award|order|launch|results/i.test(x.headline+" "+x.summary)?"🟢 إيجابي":"🟡 خبر";
-     await telegram("📰 خبر جديد — $"+x.symbol+"\n"+tone+"\n"+x.headline+"\n💰 السعر: $"+Number(x.price).toFixed(2)+"\n⏱️ "+Math.max(0,Math.floor((now-x.datetime)/60))+" دقيقة\n"+x.url,env);
+     const tone=/fda|approval|approved|contract|agreement|acquisition|merger|partnership|deal|award|order|launch|results/i.test(x.headline+" "+x.summary)?"🟢 إيجابي":"🟡 خبر";
+     await telegram("📰 خبر مباشر — $"+x.symbol+"\n"+tone+"\n"+x.headline+"\n💰 السعر: $"+Number(x.price).toFixed(2)+"\n📡 "+x.source+"\n⏱️ "+Math.max(0,Math.floor((now-x.datetime)/60))+" دقيقة\n"+x.url,env);
    }
- }\n out.sort((a,b)=>{
-   const ah=isHot(a.headline+" "+a.summary)?1:0;
-   const bh=isHot(b.headline+" "+b.summary)?1:0;
-   return (bh-ah)||(b.datetime-a.datetime)||(b.volume-a.volume);
- });
-
+ }
  return json({
-  stats:{
-   matching:out.length,lastHour:out.filter(x=>now-x.datetime<=3600).length,
-   hot:out.filter(x=>x.hot).length,universe:base.length,scanned:syms.length
-  },
-  items:out.slice(0,50),
-  note:"المصدر يبدأ من قائمة أسهم Nasdaq/NYSE/AMEX بسعر $1-$7 ثم يفحص Company News، ولا يعرض الخبر إلا إذا كان مرتبطًا مباشرة بالشركة؛ مقالات القوائم والأخبار العامة تُستبعد. «حصري» غير مضمون."
+   stats:{matching:out.length,lastHour:out.filter(x=>now-x.datetime<=3600).length,hot:out.filter(x=>x.hot).length,universe:universe.size,scanned:out.length},
+   items:out.slice(0,50),
+   note:"المصدر الأساسي الآن نشرات الشركات المباشرة عبر GlobeNewswire وPR Newswire. السعر يُفلتر من Nasdaq/NYSE/AMEX بين $1 و$7، وتُستبعد أخبار القوائم والسوق العامة والتنبيهات الترويجية."
  });
 }
 
